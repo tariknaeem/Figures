@@ -659,6 +659,36 @@ do {
     print("FAIL Numbers features: \(error)")
 }
 
+// Canvas objects
+do {
+    func at(_ a1: String) -> CellAddress { CellAddress(a1: a1)! }
+    var page = sheet(["A1": "Month", "B1": "Sales", "A2": "Jan", "B2": "10", "A3": "Feb", "B3": "25"])
+    let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02])
+    page.canvas = [
+        CanvasObject(x: 300, y: 20, width: 320, height: 200, kind: .chart(.column, range: CellRange(at("A1"), at("B3")), title: "Sales")),
+        CanvasObject(x: 10, y: 260, width: 200, height: 60, kind: .text("Notes & <ideas>"), fill: RGBColor(hex: "FFF2CC"), fontSize: 18, bold: true),
+        CanvasObject(x: 220, y: 260, width: 80, height: 80, kind: .shape(.oval), fill: RGBColor(hex: "70AD47"), stroke: RGBColor(hex: "000000")),
+        CanvasObject(x: 320, y: 260, width: 50, height: 50, kind: .image(png)),
+    ]
+    let book = Workbook(sheets: [page])
+    let reread = try XLSXReader.workbook(from: XLSXWriter.data(for: book))
+    check("canvas round trip", reread.sheets[0].canvas, page.canvas)
+    let data = Calculator(workbook: book).chartData(CellRange(at("A1"), at("B3")), sheet: 0)
+    check("chart data categories", data.categories, ["Jan", "Feb"])
+    check("chart data series", data.series.map(\.name), ["Sales"])
+    check("chart data values", data.series.first?.values, [10, 25])
+    var moved = book
+    moved.apply(.insertRows(at: 0, count: 2), toSheet: 0)
+    if case .chart(_, let range, _) = moved.sheets[0].canvas[0].kind {
+        check("chart range follows inserted rows", range.a1, "A3:B5")
+    } else {
+        check("chart kind kept", false, true)
+    }
+} catch {
+    failures += 1
+    print("FAIL canvas: \(error)")
+}
+
 // Formula autocomplete
 check("assist prefix", FormulaAssist(text: "=SUM(A1)+VL").suggestions.map(\.name), ["VLOOKUP"])
 check("assist ref is not a name", FormulaAssist(text: "=A1").suggestions.isEmpty, true)

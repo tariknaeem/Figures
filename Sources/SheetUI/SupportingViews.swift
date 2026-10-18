@@ -1,4 +1,3 @@
-import Charts
 import Combine
 import SheetCore
 import SwiftUI
@@ -137,115 +136,6 @@ struct FilterPopover: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-}
-
-enum ChartKind: String, CaseIterable, Identifiable {
-    case column = "Column", bar = "Bar", line = "Line", pie = "Pie"
-    var id: String { rawValue }
-}
-
-struct ChartSeries {
-    let name: String
-    let values: [Double]
-}
-
-struct ChartRequest: Identifiable {
-    let id = UUID()
-    let kind: ChartKind
-    let title: String
-    let categories: [String]
-    let series: [ChartSeries]
-}
-
-private struct ChartPoint: Identifiable {
-    let id: Int
-    let category: String
-    let series: String
-    let value: Double
-}
-
-final class ChartPanelState: ObservableObject {
-    @Published var kind: ChartKind
-
-    init(kind: ChartKind) {
-        self.kind = kind
-    }
-}
-
-/// A chart of the selected cells, shown in a sheet.
-struct ChartPanel: View {
-    let request: ChartRequest
-    @StateObject private var state: ChartPanelState
-    @Environment(\.dismiss) private var dismiss
-
-    init(request: ChartRequest) {
-        self.request = request
-        _state = StateObject(wrappedValue: ChartPanelState(kind: request.kind))
-    }
-
-    private var points: [ChartPoint] {
-        var points: [ChartPoint] = []
-        for series in request.series {
-            for (index, category) in request.categories.enumerated() where index < series.values.count {
-                points.append(ChartPoint(id: points.count, category: category, series: series.name, value: series.values[index]))
-            }
-        }
-        return points
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(request.title).font(.headline)
-                Spacer()
-                Picker("Chart type", selection: $state.kind) {
-                    ForEach(ChartKind.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 280)
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            chart
-                .frame(minWidth: 560, minHeight: 360)
-            Text("Charts are previews of the current values and are not saved in the workbook.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(16)
-    }
-
-    @ViewBuilder
-    private var chart: some View {
-        let points = points
-        switch state.kind {
-        case .column:
-            Chart(points) { point in
-                BarMark(x: .value("Category", point.category), y: .value("Value", point.value))
-                    .foregroundStyle(by: .value("Series", point.series))
-                    .position(by: .value("Series", point.series))
-            }
-        case .bar:
-            Chart(points) { point in
-                BarMark(x: .value("Value", point.value), y: .value("Category", point.category))
-                    .foregroundStyle(by: .value("Series", point.series))
-                    .position(by: .value("Series", point.series))
-            }
-        case .line:
-            Chart(points) { point in
-                LineMark(x: .value("Category", point.category), y: .value("Value", point.value))
-                    .foregroundStyle(by: .value("Series", point.series))
-                    .symbol(by: .value("Series", point.series))
-            }
-        case .pie:
-            // A pie shows the first series only, as in Excel.
-            Chart(points.filter { $0.series == request.series.first?.name }) { point in
-                SectorMark(angle: .value("Value", max(point.value, 0)), angularInset: 1)
-                    .foregroundStyle(by: .value("Category", point.category))
-            }
-        }
     }
 }
 
@@ -531,14 +421,14 @@ struct ControlSheet: View {
 
 /// Quick table looks: a colored header row and banded body rows, as Numbers' table styles.
 enum TableStylePreset: String, CaseIterable, Identifiable {
-    case blue = "Blue", green = "Green", orange = "Orange", purple = "Purple", gray = "Gray", plain = "Plain"
+    case green = "Green", blue = "Blue", orange = "Orange", purple = "Purple", gray = "Gray", plain = "Plain"
 
     var id: String { rawValue }
 
     var colors: (header: String, band: String, line: String) {
         switch self {
         case .blue: ("4472C4", "D9E1F2", "8EA9DB")
-        case .green: ("70AD47", "E2EFDA", "A9D08E")
+        case .green: ("1E9A57", "E7F5EC", "B7DFC6")
         case .orange: ("ED7D31", "FCE4D6", "F4B084")
         case .purple: ("7030A0", "E4DFEC", "B4A7D6")
         case .gray: ("595959", "EDEDED", "BFBFBF")

@@ -18,6 +18,8 @@ let package = Package(
         .executableTarget(name: "Figures", dependencies: ["SheetUI"], path: "App"),
         // Engine checks; runs with the Command Line Tools, which lack XCTest.
         .executableTarget(name: "SheetCoreChecks", dependencies: ["SheetCore"]),
+        // Renders the window to an image for reviewing the interface without a screen.
+        .executableTarget(name: "FiguresSnapshot", dependencies: ["SheetCore", "SheetUI"]),
     ],
     swiftLanguageModes: [.v5]
 )

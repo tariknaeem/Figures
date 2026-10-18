@@ -2,14 +2,33 @@ import Combine
 import Foundation
 import SheetCore
 
-enum RibbonTab: String, CaseIterable, Identifiable {
-    case home = "Home", insert = "Insert", formulas = "Formulas", data = "Data", view = "View"
+/// The panels the inspector on the right can show.
+enum InspectorPane: String, CaseIterable, Identifiable {
+    case format = "Format", organize = "Organize"
     var id: String { rawValue }
 }
 
-enum PaletteTarget: String, Identifiable {
-    case text, fill
+enum FormatTab: String, CaseIterable, Identifiable {
+    case cell = "Cell", text = "Text", table = "Table", object = "Object"
     var id: String { rawValue }
+}
+
+enum OrganizeTab: String, CaseIterable, Identifiable {
+    case sort = "Sort & Filter", highlight = "Highlighting"
+    var id: String { rawValue }
+}
+
+/// Which color a palette popover changes.
+enum PaletteTarget: String, Identifiable {
+    case text, fill, objectFill, objectStroke, objectText
+    var id: String { rawValue }
+}
+
+/// A canvas object being moved or resized; committed to the workbook when the drag ends.
+struct ObjectDrag: Equatable {
+    let id: UUID
+    var offset: CGSize = .zero
+    var resize: CGSize = .zero
 }
 
 /// Per-window grid state. A model object rather than `@State` properties because the
@@ -21,7 +40,15 @@ final class GridModel: ObservableObject {
     @Published var editor: CellEditor?
     @Published var renaming: Int?
     @Published var renameText = ""
-    @Published var ribbonTab: RibbonTab = .home
+    @Published var inspector: InspectorPane? = .format
+    @Published var formatTab: FormatTab = .cell
+    @Published var organizeTab: OrganizeTab = .sort
+    @Published var selectedObject: UUID?
+    @Published var editingObject: UUID?
+    @Published var objectDrag: ObjectDrag?
+    @Published var importingImage = false
+    /// The line style the border buttons draw with.
+    @Published var borderStyle: BorderStyle = .thin
     @Published var zoom = 1.0
     @Published var showFormulas = false
     @Published var findVisible = false
@@ -34,7 +61,6 @@ final class GridModel: ObservableObject {
     /// Column whose filter dropdown is open.
     @Published var filterColumn: Int?
     @Published var palette: PaletteTarget?
-    @Published var chart: ChartRequest?
     @Published var message: String?
     /// The format Format Painter will apply to the next cell clicked.
     @Published var painter: CellFormat?
@@ -50,6 +76,7 @@ final class GridModel: ObservableObject {
     let cache = CalculationCache()
     let undoTarget = UndoTarget()
     let actions = GridActions()
+    let canvasActions = CanvasActions()
     var layout: GridLayout?
     private var boundsCache: (version: UUID, sheet: Int, row: Int, column: Int)?
 

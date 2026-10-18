@@ -126,7 +126,7 @@ public enum XLSXWriter {
         for (priority, format) in sheet.conditionalFormats.enumerated() {
             xml += conditionalXML(format, priority: priority + 1, styles: &styles)
         }
-        xml += controlsXML(sheet.controls)
+        xml += controlsXML(sheet.controls, canvas: sheet.canvas)
         return xml + "</worksheet>"
     }
 
@@ -136,8 +136,8 @@ public enum XLSXWriter {
 
     /// Pop-up menus with a short list or a range become Excel data validation lists; the other controls,
     /// and lists Excel cannot hold inline, go in a Figures extension.
-    private static func controlsXML(_ controls: [CellAddress: CellControl]) -> String {
-        guard !controls.isEmpty else { return "" }
+    private static func controlsXML(_ controls: [CellAddress: CellControl], canvas: [CanvasObject]) -> String {
+        guard !controls.isEmpty || !canvas.isEmpty else { return "" }
         var validations: [(sqref: String, formula: String)] = []
         var extensions: [(sqref: String, control: CellControl)] = []
         for (control, addresses) in Dictionary(grouping: controls.keys, by: { controls[$0]! }).sorted(by: { $0.value.min()! < $1.value.min()! }) {
@@ -165,7 +165,7 @@ public enum XLSXWriter {
             }
             xml += "</dataValidations>"
         }
-        if !extensions.isEmpty {
+        if !extensions.isEmpty || !canvas.isEmpty {
             xml += #"<extLst><ext uri="\#(controlsExtension)" xmlns:fig="\#(controlsNamespace)"><fig:controls>"#
             for item in extensions {
                 switch item.control {
@@ -182,9 +182,35 @@ public enum XLSXWriter {
                     }
                 }
             }
-            xml += "</fig:controls></ext></extLst>"
+            xml += "</fig:controls>"
+            if !canvas.isEmpty { xml += canvasXML(canvas) }
+            xml += "</ext></extLst>"
         }
         return xml
+    }
+
+    private static func canvasXML(_ objects: [CanvasObject]) -> String {
+        func number(_ value: Double) -> String { NumberText.roundTrip((value * 100).rounded() / 100) }
+        var xml = "<fig:canvas>"
+        for object in objects {
+            var attributes = #" id="\#(object.id.uuidString)" x="\#(number(object.x))" y="\#(number(object.y))""#
+            attributes += #" width="\#(number(object.width))" height="\#(number(object.height))""#
+            attributes += #" fontSize="\#(number(object.fontSize))""# + (object.bold ? #" bold="1""# : "")
+            if let fill = object.fill { attributes += #" fill="\#(fill.hex)""# }
+            if let stroke = object.stroke { attributes += #" stroke="\#(stroke.hex)""# }
+            if let color = object.textColor { attributes += #" textColor="\#(color.hex)""# }
+            switch object.kind {
+            case .chart(let kind, let range, let title):
+                xml += #"<fig:object type="chart" chart="\#(kind.rawValue)" range="\#(range.a1)" title="\#(XML.escape(title))"\#(attributes)/>"#
+            case .text(let text):
+                xml += #"<fig:object type="text"\#(attributes)><fig:text>\#(XML.escape(text))</fig:text></fig:object>"#
+            case .shape(let shape):
+                xml += #"<fig:object type="shape" shape="\#(shape.rawValue)"\#(attributes)/>"#
+            case .image(let data):
+                xml += #"<fig:object type="image"\#(attributes)><fig:data>\#(data.base64EncodedString())</fig:data></fig:object>"#
+            }
+        }
+        return xml + "</fig:canvas>"
     }
 
     /// Writes addresses as a space-separated sqref, joining runs down each column into ranges.

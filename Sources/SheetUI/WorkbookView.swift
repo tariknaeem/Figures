@@ -18,8 +18,11 @@ public struct WorkbookView: View {
     static let pointScale: CGFloat = 1.2
     static let rowHeaderWidth: CGFloat = 46
     static let headerHeight: CGFloat = 20
-    static let headerBackground = Color(red: 0.95, green: 0.95, blue: 0.95)
-    static let gridColor = Color(red: 0.84, green: 0.84, blue: 0.84)
+    static let headerBackground = Color(red: 0.965, green: 0.965, blue: 0.97)
+    static let headerText = Color(red: 0.47, green: 0.48, blue: 0.5)
+    static let gridColor = Color(red: 0.885, green: 0.885, blue: 0.89)
+    /// Figures green, from the app icon.
+    static let accent = Color(red: 0.118, green: 0.604, blue: 0.341)
 
     public init(workbook: Binding<Workbook>) {
         _workbook = workbook
@@ -48,32 +51,44 @@ public struct WorkbookView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            ribbon
+            toolbar
             Divider()
-            if model.findVisible {
-                findBar
-                Divider()
-            }
-            formulaBar
-                .sheet(item: $model.formatDraft) { draft in
-                    FormatSheet(draft: draft) { code in updateFormats("Number Format") { $0.numberFormat = code } }
+            sheetTabs
+            Divider()
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    if model.findVisible {
+                        findBar
+                        Divider()
+                    }
+                    formulaBar
+                        .sheet(item: $model.formatDraft) { draft in
+                            FormatSheet(draft: draft) { code in updateFormats("Number Format") { $0.numberFormat = code } }
+                        }
+                    Divider()
+                    ZStack(alignment: .topLeading) {
+                        grid
+                        formulaAssist
+                    }
+                    .sheet(item: $model.ruleDraft) { draft in
+                        RuleSheet(draft: draft) { applyRule($0) }
+                    }
+                    .background {
+                        Color.clear.sheet(item: $model.controlDraft) { draft in
+                            ControlSheet(draft: draft) { applyControl($0) }
+                        }
+                    }
+                    Divider()
+                    bottomBar
                 }
-            Divider()
-            ZStack(alignment: .topLeading) {
-                grid
-                formulaAssist
-            }
-            .sheet(item: $model.ruleDraft) { draft in
-                RuleSheet(draft: draft) { applyRule($0) }
-            }
-            .background {
-                Color.clear.sheet(item: $model.controlDraft) { draft in
-                    ControlSheet(draft: draft) { applyControl($0) }
+                if model.inspector != nil {
+                    Divider()
+                    inspector
+                        .transition(.move(edge: .trailing))
                 }
             }
-            Divider()
-            bottomBar
         }
+        .tint(Self.accent)
         .background { shortcutButtons }
         .alert("Rename Sheet", isPresented: Binding(get: { model.renaming != nil }, set: { if !$0 { model.renaming = nil } })) {
             TextField("Name", text: $model.renameText)
@@ -90,7 +105,6 @@ public struct WorkbookView: View {
         .alert(model.message ?? "", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK", role: .cancel) {}
         }
-        .sheet(item: $model.chart) { ChartPanel(request: $0) }
         .onAppear { focus = .grid }
     }
 
@@ -100,27 +114,32 @@ public struct WorkbookView: View {
         HStack(spacing: 8) {
             TextField("", text: nameBoxText)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                .frame(width: 90)
-                .padding(.leading, 8)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .multilineTextAlignment(.center)
+                .frame(width: 84, height: 26)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .focused($focus, equals: .nameBox)
                 .onSubmit { goToNameBox() }
-                .help("Name Box: type a cell such as B12 or a range such as A1:C10")
-            Divider().frame(height: 18)
-            Text("fx")
-                .font(.system(size: 13, design: .serif))
-                .italic()
-                .foregroundStyle(.secondary)
-            TextField("", text: formulaBarText)
+                .help("Go to a cell such as B12, a range such as A1:C10, or a defined name")
+            Image(systemName: "function")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(editor?.text.hasPrefix("=") == true ? Self.accent : Color.secondary)
+            TextField("Type a value, or = to start a formula", text: formulaBarText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(.background, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(focus == .formulaBar ? Self.accent.opacity(0.6) : Color.primary.opacity(0.12)))
                 .focused($focus, equals: .formulaBar)
                 .onSubmit { commitEdit(moveRows: 1, moveColumns: 0) }
                 #if os(macOS)
                 .onExitCommand { cancelEdit() }
                 #endif
         }
-        .frame(height: 30)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
     }
 
     private var nameBoxText: Binding<String> {
@@ -216,6 +235,7 @@ public struct WorkbookView: View {
                                  fillPreview: model.fillPreview)
         configureActions()
 
+        configureCanvas()
         return ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical]) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -236,6 +256,7 @@ public struct WorkbookView: View {
                         .background(Color.white)
                     }
                 }
+                .overlay(alignment: .topLeading) { canvasLayer }
             }
             .background(Color.white)
             .onChange(of: selection.active) { _, active in
@@ -378,10 +399,10 @@ public struct WorkbookView: View {
                 .help("Select All")
             ForEach(columns, id: \.self) { column in
                 Text(CellAddress.columnName(column))
-                    .font(.system(size: 11 * zoom, weight: selected.contains(column) ? .semibold : .regular))
-                    .foregroundStyle(Color(white: 0.35))
+                    .font(.system(size: 11 * zoom, weight: selected.contains(column) ? .semibold : .medium))
+                    .foregroundStyle(selected.contains(column) ? Self.accent : Self.headerText)
                     .frame(width: columnWidth(column), height: Self.headerHeight * zoom)
-                    .background(selected.contains(column) ? Color.accentColor.opacity(0.18) : Self.headerBackground)
+                    .background(selected.contains(column) ? Self.accent.opacity(0.13) : Self.headerBackground)
                     .overlay(headerLine)
                     .contentShape(Rectangle())
                     .onTapGesture { selectColumn(column) }
@@ -472,85 +493,101 @@ public struct WorkbookView: View {
         .padding(.vertical, 6)
     }
 
-    // MARK: - Sheet tabs and status
+    // MARK: - Status
 
     private var bottomBar: some View {
-        HStack(spacing: 4) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(workbook.sheets.indices, id: \.self) { index in
-                        Text(workbook.sheets[index].name)
-                            .font(.system(size: 12, weight: index == activeSheet ? .semibold : .regular))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(
-                                index == activeSheet ? Color.accentColor.opacity(0.18) : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 5)
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture(count: 2) { startRename(index) }
-                            .onTapGesture { switchSheet(index) }
-                            .contextMenu {
-                                Button("Rename…") { startRename(index) }
-                                Button("Delete", role: .destructive) { deleteSheet(index) }
-                                    .disabled(workbook.sheets.count < 2)
-                            }
-                    }
-                    Button(action: addSheet) { Image(systemName: "plus") }
-                        .buttonStyle(.borderless)
-                        .help("New Sheet")
-                }
-                .padding(.horizontal, 8)
-            }
+        HStack(spacing: 6) {
             if model.painter != nil {
-                Text("Click a cell to paste formatting · Esc to cancel")
+                Label("Click a cell to paste formatting · Esc to cancel", systemImage: "paintbrush.pointed")
                     .font(.system(size: 11))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Self.accent)
             }
-            Text(selectionSummary)
+            ForEach(quickCalculations, id: \.0) { name, value in
+                HStack(spacing: 4) {
+                    Text(name).foregroundStyle(.secondary)
+                    Text(value).fontWeight(.semibold)
+                }
                 .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Divider().frame(height: 16)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.05), in: Capsule())
+            }
+            Spacer()
             Button { setZoom(model.zoom - 0.1) } label: { Image(systemName: "minus") }
                 .buttonStyle(.borderless)
                 .help("Zoom Out")
             Slider(value: Binding(get: { model.zoom }, set: { setZoom($0) }), in: 0.5...2.5)
-                .frame(width: 110)
+                .frame(width: 100)
+                .controlSize(.small)
             Button { setZoom(model.zoom + 0.1) } label: { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
                 .help("Zoom In")
             Text("\(Int((model.zoom * 100).rounded()))%")
                 .font(.system(size: 11).monospacedDigit())
-                .frame(width: 40, alignment: .trailing)
-                .padding(.trailing, 10)
+                .foregroundStyle(.secondary)
+                .frame(width: 38, alignment: .trailing)
         }
+        .padding(.horizontal, 10)
         .frame(height: 30)
     }
 
-    /// Sum, average and count of the selected cells, as in Excel's status bar.
-    private var selectionSummary: String {
+    /// Sum, average, minimum, maximum and count of the selection, like Numbers' Quick Calculations.
+    private var quickCalculations: [(String, String)] {
         let range = selection.range
-        guard range.cellCount > 1 else { return "" }
+        guard range.cellCount > 1 else { return [] }
         let values = calculator.cells(in: range, sheet: activeSheet)
         let numbers = values.compactMap { cell -> Double? in
             if case .number(let n) = cell.value { return n }
             return nil
         }
-        // Quick Calculations, as in Numbers' status bar.
-        var parts: [String] = []
+        var parts: [(String, String)] = []
         if !numbers.isEmpty {
             let sum = numbers.reduce(0, +)
-            parts.append("Sum: " + CellValue.number(sum).displayText)
-            parts.append("Average: " + CellValue.number(sum / Double(numbers.count)).displayText)
-            parts.append("Min: " + CellValue.number(numbers.min()!).displayText)
-            parts.append("Max: " + CellValue.number(numbers.max()!).displayText)
+            parts.append(("Sum", CellValue.number(sum).displayText))
+            parts.append(("Average", CellValue.number(sum / Double(numbers.count)).displayText))
+            parts.append(("Min", CellValue.number(numbers.min()!).displayText))
+            parts.append(("Max", CellValue.number(numbers.max()!).displayText))
         }
-        parts.append("Count: \(values.count)")
-        return parts.joined(separator: "   ")
+        parts.append(("Count", "\(values.count)"))
+        return parts
     }
 
-    /// Invisible buttons so shortcuts work whichever ribbon tab is showing.
+    // MARK: - Canvas
+
+    private var canvasLayer: some View {
+        let objects = sheet.canvas
+        let calc = calculator
+        var charts: [UUID: ChartData] = [:]
+        for object in objects {
+            if case .chart(_, let range, _) = object.kind { charts[object.id] = calc.chartData(range, sheet: activeSheet) }
+        }
+        return CanvasLayer(objects: objects, charts: charts, selected: model.selectedObject, editing: model.editingObject,
+                           drag: model.objectDrag, zoom: zoom,
+                           origin: CGPoint(x: Self.rowHeaderWidth, y: Self.headerHeight * zoom), actions: model.canvasActions)
+    }
+
+    /// Points canvas callbacks at this window.
+    private func configureCanvas() {
+        let actions = model.canvasActions
+        actions.perform = { perform($0) }
+        let sheetIndex = activeSheet
+        let binding = $workbook
+        actions.text = { id in
+            Binding(
+                get: {
+                    guard let object = binding.wrappedValue.sheets[sheetIndex].canvas.first(where: { $0.id == id }),
+                          case .text(let text) = object.kind else { return "" }
+                    return text
+                },
+                set: { text in
+                    guard let index = binding.wrappedValue.sheets[sheetIndex].canvas.firstIndex(where: { $0.id == id }) else { return }
+                    binding.wrappedValue.sheets[sheetIndex].canvas[index].kind = .text(text)
+                }
+            )
+        }
+    }
+
+    /// Invisible buttons so shortcuts work wherever focus is.
     private var shortcutButtons: some View {
         Group {
             Button("Bold") { toggle(\.bold, "Bold") }.keyboardShortcut("b")

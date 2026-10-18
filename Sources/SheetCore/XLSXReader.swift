@@ -143,6 +143,7 @@ public enum XLSXReader {
                     for address in range.addresses { sheet.controls[address] = control }
                 }
             }
+            sheet.canvas = (ext.child("canvas")?.children("object") ?? []).compactMap(canvasObject)
         }
 
         // Shared formulas store their text once, on the first cell of the block.
@@ -199,6 +200,34 @@ public enum XLSXReader {
                 if let raw, !raw.isEmpty { sheet.cells[address] = raw }
             }
         }
+    }
+
+    private static func canvasObject(_ node: XMLNodeTree) -> CanvasObject? {
+        func number(_ name: String, _ fallback: Double) -> Double { node.attribute(name).flatMap(Double.init) ?? fallback }
+        let kind: CanvasObject.Kind
+        switch node.attribute("type") ?? "" {
+        case "chart":
+            guard let range = node.attribute("range").flatMap({ RangeList.parse($0).first }) else { return nil }
+            kind = .chart(CanvasObject.ChartKind(rawValue: node.attribute("chart") ?? "") ?? .column, range: range, title: node.attribute("title") ?? "")
+        case "text":
+            kind = .text(node.child("text")?.text ?? "")
+        case "shape":
+            kind = .shape(CanvasObject.ShapeKind(rawValue: node.attribute("shape") ?? "") ?? .rectangle)
+        case "image":
+            guard let data = node.child("data").flatMap({ Data(base64Encoded: $0.text, options: .ignoreUnknownCharacters) }) else { return nil }
+            kind = .image(data)
+        default:
+            return nil
+        }
+        return CanvasObject(
+            id: node.attribute("id").flatMap(UUID.init(uuidString:)) ?? UUID(),
+            x: number("x", 0), y: number("y", 0), width: max(8, number("width", 200)), height: max(8, number("height", 120)),
+            kind: kind,
+            fill: node.attribute("fill").flatMap { RGBColor(hex: $0) },
+            stroke: node.attribute("stroke").flatMap { RGBColor(hex: $0) },
+            textColor: node.attribute("textColor").flatMap { RGBColor(hex: $0) },
+            fontSize: number("fontSize", 14), bold: node.flag("bold")
+        )
     }
 
     private static func conditionalRule(_ node: XMLNodeTree, styles: StyleReader, colors: ColorResolver) -> ConditionalRule? {

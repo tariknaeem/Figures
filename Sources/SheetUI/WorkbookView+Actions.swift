@@ -36,6 +36,18 @@ extension WorkbookView {
             editor?.text += press.characters
             return .handled
         }
+        if model.selectedObject != nil, model.editingObject == nil {
+            switch press.key {
+            case .delete, .deleteForward:
+                deleteSelectedObject()
+                return .handled
+            case .escape:
+                model.selectedObject = nil
+                return .handled
+            default:
+                break
+            }
+        }
         let extend = press.modifiers.contains(.shift)
         switch press.key {
         case .upArrow: move(rows: -1, columns: 0, extend: extend)
@@ -106,6 +118,11 @@ extension WorkbookView {
     }
 
     func cellTapped(_ tapped: CellAddress) {
+        if model.selectedObject != nil {
+            model.selectedObject = nil
+            model.editingObject = nil
+            if model.formatTab == .object { model.formatTab = .cell }
+        }
         let address = sheet.merge(containing: tapped)?.start ?? tapped
         // While typing a formula, clicking a cell inserts its reference.
         if var current = editor, current.text.hasPrefix("="), current.address != address,
@@ -1025,42 +1042,134 @@ extension WorkbookView {
         model.findStatus = "Replaced in \(count) cell\(count == 1 ? "" : "s")"
     }
 
-    // MARK: - Charts
+    // MARK: - Canvas objects
 
-    /// Charts the selection (or the data around the active cell): a text first row names the
-    /// series, a text first column labels the categories.
-    func insertChart(_ kind: ChartKind) {
+    /// The top-left corner of a cell in canvas coordinates (points at 100% zoom from the corner of A1).
+    func canvasOrigin(of address: CellAddress) -> CGPoint {
+        let layout = layout
+        let x = layout.columns.filter { $0 < address.column }.reduce(CGFloat(0)) { $0 + layout.width($1) } / zoom
+        var y: CGFloat = 0
+        for row in 0..<min(address.row, 20_000) where !layout.hidden.contains(row) { y += layout.height(row) }
+        return CGPoint(x: x, y: y / zoom)
+    }
+
+    private func addObject(_ object: CanvasObject, _ actionName: String) {
         commitEdit(moveRows: 0, moveColumns: 0)
-        let range = selection.range.cellCount > 1 ? selection.range : sheet.currentRegion(around: selection.active)
-        let calc = calculator
         let index = activeSheet
-        func value(_ row: Int, _ column: Int) -> CellValue { calc.value(sheet: index, at: CellAddress(row: row, column: column)) }
-        func isText(_ v: CellValue) -> Bool {
-            if case .text = v { return true }
-            return false
-        }
+        mutate(actionName) { $0.sheets[index].canvas.append(object) }
+        model.selectedObject = object.id
+        model.inspector = .format
+        model.formatTab = .object
+    }
 
-        let headerRow = range.rowCount > 1 && (range.start.column...range.end.column).contains { isText(value(range.start.row, $0)) }
-        let dataRows = Array((headerRow ? range.start.row + 1 : range.start.row)...range.end.row)
-        let labelColumn = range.columnCount > 1 && dataRows.contains { !value($0, range.start.column).isNumber }
-        let seriesColumns = Array((labelColumn ? range.start.column + 1 : range.start.column)...range.end.column)
-        let series = seriesColumns.map { column in
-            ChartSeries(
-                name: headerRow ? calc.displayText(sheet: index, at: CellAddress(row: range.start.row, column: column)) : "Column " + CellAddress.columnName(column),
-                values: dataRows.map { row in
-                    if case .number(let n) = value(row, column) { return n }
-                    return 0
-                }
-            )
-        }
-        guard series.contains(where: { $0.values.contains { $0 != 0 } }) else {
+    /// A live chart of the selection (or the data around the active cell), placed to its right.
+    func insertChart(_ kind: CanvasObject.ChartKind) {
+        let range = selection.range.cellCount > 1 ? selection.range : sheet.currentRegion(around: selection.active)
+        guard !calculator.chartData(range, sheet: activeSheet).isEmpty else {
             model.message = "Select numbers to chart, with labels in the first column and a header row if you have them."
             return
         }
-        let categories = dataRows.map { row in
-            labelColumn ? calc.displayText(sheet: index, at: CellAddress(row: row, column: range.start.column)) : String(row + 1)
+        let origin = canvasOrigin(of: CellAddress(row: range.start.row, column: range.end.column + 1))
+        addObject(CanvasObject(x: origin.x + 16, y: origin.y, width: 420, height: 260,
+                               kind: .chart(kind, range: range, title: "")), "Insert Chart")
+    }
+
+    func insertTextBox() {
+        let origin = canvasOrigin(of: selection.active)
+        let object = CanvasObject(x: origin.x + 8, y: origin.y + 8, width: 220, height: 70, kind: .text("Text"), fontSize: 18)
+        addObject(object, "Insert Text Box")
+        model.editingObject = object.id
+    }
+
+    func insertShape(_ shape: CanvasObject.ShapeKind) {
+        let origin = canvasOrigin(of: selection.active)
+        let size: CGSize = shape == .arrow ? CGSize(width: 160, height: 60) : CGSize(width: 140, height: 100)
+        addObject(CanvasObject(x: origin.x + 8, y: origin.y + 8, width: size.width, height: size.height, kind: .shape(shape),
+                               fill: SheetCore.RGBColor(hex: "4CC38A"), stroke: nil), "Insert Shape")
+    }
+
+    /// Adds a picture from a file, scaled to at most 360 points wide.
+    func insertImage(from url: URL) {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url), data.count <= 20_000_000, let size = Self.imageSize(data) else {
+            model.message = "That file could not be added. Choose a PNG, JPEG, HEIC or GIF picture under 20 MB."
+            return
         }
-        model.chart = ChartRequest(kind: kind, title: "\(sheet.name)!\(range.a1)", categories: categories, series: series)
+        let scale = min(1, 360 / max(size.width, 1))
+        let origin = canvasOrigin(of: selection.active)
+        addObject(CanvasObject(x: origin.x + 8, y: origin.y + 8, width: size.width * scale, height: size.height * scale,
+                               kind: .image(data)), "Insert Image")
+    }
+
+    static func imageSize(_ data: Data) -> CGSize? {
+        #if os(macOS)
+        guard let image = NSImage(data: data), image.size.width > 0 else { return nil }
+        return image.size
+        #else
+        guard let image = UIImage(data: data) else { return nil }
+        return image.size
+        #endif
+    }
+
+    var selectedObjectIndex: Int? {
+        model.selectedObject.flatMap { id in sheet.canvas.firstIndex { $0.id == id } }
+    }
+
+    func updateSelectedObject(_ actionName: String, _ change: (inout CanvasObject) -> Void) {
+        guard let objectIndex = selectedObjectIndex else { return }
+        let index = activeSheet
+        mutate(actionName) { change(&$0.sheets[index].canvas[objectIndex]) }
+    }
+
+    func deleteSelectedObject() {
+        guard let id = model.selectedObject else { return }
+        let index = activeSheet
+        mutate("Delete Object") { $0.sheets[index].canvas.removeAll { $0.id == id } }
+        model.selectedObject = nil
+        model.editingObject = nil
+        if model.formatTab == .object { model.formatTab = .cell }
+    }
+
+    func reorderSelectedObject(toFront: Bool) {
+        guard let objectIndex = selectedObjectIndex else { return }
+        let index = activeSheet
+        mutate(toFront ? "Bring to Front" : "Send to Back") { workbook in
+            let object = workbook.sheets[index].canvas.remove(at: objectIndex)
+            if toFront { workbook.sheets[index].canvas.append(object) } else { workbook.sheets[index].canvas.insert(object, at: 0) }
+        }
+    }
+
+    func perform(_ command: CanvasCommand) {
+        switch command {
+        case .select(let id):
+            commitEdit(moveRows: 0, moveColumns: 0)
+            if model.editingObject != id { model.editingObject = nil }
+            model.selectedObject = id
+            model.formatTab = .object
+            if model.inspector == nil { model.inspector = .format }
+        case .edit(let id):
+            model.selectedObject = id
+            model.editingObject = id
+        case .drag(let id, let translation, let resizing):
+            var drag = model.objectDrag?.id == id ? model.objectDrag! : ObjectDrag(id: id)
+            if resizing { drag.resize = translation } else { drag.offset = translation }
+            model.selectedObject = id
+            model.objectDrag = drag
+        case .endDrag:
+            guard let drag = model.objectDrag, let objectIndex = sheet.canvas.firstIndex(where: { $0.id == drag.id }) else { return }
+            model.objectDrag = nil
+            let index = activeSheet
+            let scale = zoom
+            mutate(drag.resize == .zero ? "Move Object" : "Resize Object") { workbook in
+                var object = workbook.sheets[index].canvas[objectIndex]
+                object.x = max(0, object.x + drag.offset.width / scale)
+                object.y = max(0, object.y + drag.offset.height / scale)
+                object.width = max(24, object.width + drag.resize.width / scale)
+                object.height = max(24, object.height + drag.resize.height / scale)
+                workbook.sheets[index].canvas[objectIndex] = object
+            }
+        }
     }
 
     // MARK: - Sheets

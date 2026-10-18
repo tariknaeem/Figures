@@ -191,6 +191,7 @@ extension Sheet {
         controls = Dictionary(uniqueKeysWithValues: controls.compactMap { address, control in
             change.adjust(address).map { ($0, control) }
         })
+        canvas = canvas.map { change.adjust($0) }
         if change.affectsRows {
             hiddenRows = Set(hiddenRows.compactMap(change.map))
         } else {

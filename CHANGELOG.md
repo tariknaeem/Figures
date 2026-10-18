@@ -3,6 +3,28 @@
 Figures follows [Semantic Versioning](https://semver.org): a **major** version for changes that break
 compatibility, a **minor** version for new features, and a **patch** version for fixes and speed-ups.
 
+## 2.0.0 — 2026-10-18
+
+A new interface, and a canvas for objects that float over the cells.
+
+### Changed
+- The Excel-style ribbon is replaced by a Mac toolbar (Insert, Table, Chart, Text, Shape, Media, Controls,
+  Formula, Organize, Format, Share) and a Format/Organize inspector on the right. Every ribbon command is still
+  available from the toolbar, the inspector, right-click menus or a keyboard shortcut.
+- Sheet tabs move above the grid, the formula bar is redesigned, and selection, headers and templates use
+  Figures green.
+- Charts are live objects on the sheet instead of a preview window.
+
+### Added
+- **Canvas objects:** charts, text boxes, shapes (rectangle, rounded rectangle, oval, arrow) and pictures that
+  you can move, resize, recolor and layer. They are saved in the workbook; Excel ignores them.
+- **Share:** send a copy of the workbook as an `.xlsx` file.
+- **Highlighting rules list** in the Organize inspector, with one-click delete.
+- **Border line styles** (thin, medium, thick, dashed, dotted, double) in the inspector.
+
+### Fixed
+- Data bars are lighter, so the numbers on top of them stay readable.
+
 ## 1.1.0 — 2026-10-18
 
 Features inspired by Apple Numbers.

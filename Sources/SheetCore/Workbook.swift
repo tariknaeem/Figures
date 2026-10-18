@@ -24,6 +24,8 @@ public struct Sheet: Equatable, Sendable {
     public var formats: [CellAddress: CellFormat] = [:]
     /// Interactive controls shown in cells: checkboxes, star ratings, pop-up menus, steppers and sliders.
     public var controls: [CellAddress: CellControl] = [:]
+    /// Charts, text boxes, shapes and images floating over the cells, back to front.
+    public var canvas: [CanvasObject] = []
     /// Custom column widths in points.
     public var columnWidths: [Int: Double] = [:]
     /// Width of columns without a custom width, in points (Excel's 8.43 characters).

@@ -392,9 +392,9 @@ struct RowHeaderView: View {
     var body: some View {
         Text(String(row + 1))
             .font(.system(size: 11 * zoom, weight: selected ? .semibold : .regular).monospacedDigit())
-            .foregroundStyle(filtered ? Color.accentColor : Color(white: 0.35))
+            .foregroundStyle(filtered || selected ? WorkbookView.accent : WorkbookView.headerText)
             .frame(width: WorkbookView.rowHeaderWidth, height: height)
-            .background(selected ? Color.accentColor.opacity(0.18) : WorkbookView.headerBackground)
+            .background(selected ? WorkbookView.accent.opacity(0.13) : WorkbookView.headerBackground)
             .overlay(Rectangle().stroke(WorkbookView.gridColor, lineWidth: 0.5))
             .contentShape(Rectangle())
             .onTapGesture { actions.perform(.selectRow(row)) }
@@ -452,7 +452,7 @@ struct CellView: View {
                 }
             }
             .overlay {
-                if inRange { Color.accentColor.opacity(0.14).allowsHitTesting(false) }
+                if inRange { WorkbookView.accent.opacity(0.11).allowsHitTesting(false) }
                 if inFillPreview { Color.gray.opacity(0.18).allowsHitTesting(false) }
             }
             .overlay(alignment: .bottomTrailing) {
@@ -471,7 +471,7 @@ struct CellView: View {
                 Color(fill).frame(width: face.width, height: face.height)
             }
             if let bar = face.dataBar {
-                LinearGradient(colors: [Color(bar.color), Color(bar.color).opacity(0.3)], startPoint: .leading, endPoint: .trailing)
+                LinearGradient(colors: [Color(bar.color).opacity(0.55), Color(bar.color).opacity(0.12)], startPoint: .leading, endPoint: .trailing)
                     .frame(width: max(0, (face.width - 4) * bar.fraction), height: max(0, face.height - 4))
                     .offset(x: 2, y: 2)
             }
@@ -496,7 +496,9 @@ struct CellView: View {
                 CellBorderLines(border: face.border, scale: zoom).frame(width: face.width, height: face.height)
             }
             if isActive {
-                Rectangle().stroke(Color.accentColor, lineWidth: 2).frame(width: face.width, height: face.height)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .stroke(WorkbookView.accent, lineWidth: 2)
+                    .frame(width: face.width, height: face.height)
             }
         }
         .frame(width: face.width, height: face.height, alignment: .topLeading)
@@ -508,7 +510,7 @@ struct CellView: View {
     /// The small square at the selection's corner; drag it to extend a series.
     private var fillHandle: some View {
         Rectangle()
-            .fill(Color.accentColor)
+            .fill(WorkbookView.accent)
             .overlay(Rectangle().stroke(Color.white, lineWidth: 1))
             .frame(width: 7, height: 7)
             .offset(x: 3, y: 3)
@@ -538,7 +540,7 @@ struct CellView: View {
             Button { set(.boolean(!on)) } label: {
                 Image(systemName: on ? "checkmark.square.fill" : "square")
                     .font(.system(size: iconSize))
-                    .foregroundStyle(on ? Color.accentColor : Color.gray)
+                    .foregroundStyle(on ? WorkbookView.accent : Color.gray)
                     .padding(.horizontal, 4 * zoom)
             }
             .buttonStyle(.plain)
@@ -621,7 +623,7 @@ struct CellView: View {
         Button { actions.perform(.openFilter(address.column)) } label: {
             Image(systemName: face.filterActive ? "line.3.horizontal.decrease.circle.fill" : "chevron.down.square")
                 .font(.system(size: 12 * zoom))
-                .foregroundStyle(face.filterActive ? Color.accentColor : Color.gray)
+                .foregroundStyle(face.filterActive ? WorkbookView.accent : Color.gray)
                 .padding(.trailing, 3)
         }
         .buttonStyle(.plain)
@@ -639,7 +641,7 @@ struct CellView: View {
             .padding(.horizontal, 3 * zoom)
             .frame(width: max(face.width, 120 * zoom), height: face.height)
             .background(Color.white)
-            .overlay(Rectangle().stroke(Color.accentColor, lineWidth: 2))
+            .overlay(Rectangle().stroke(WorkbookView.accent, lineWidth: 2))
             .focused(focus, equals: .cellEditor)
             .onSubmit { actions.perform(.commitEdit(rows: 1, columns: 0)) }
             .onKeyPress(.tab) {

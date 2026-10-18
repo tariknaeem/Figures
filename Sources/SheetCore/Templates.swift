@@ -52,9 +52,9 @@ private struct TemplateBuilder {
         sheet = Sheet(name: name)
     }
 
-    private static let accent = RGBColor(hex: "4472C4")
-    private static let ink = RGBColor(hex: "44546A")
-    private static let band = RGBColor(hex: "F2F6FC")
+    private static let accent = RGBColor(hex: "1E9A57")
+    private static let ink = RGBColor(hex: "1F3A2C")
+    private static let band = RGBColor(hex: "F1F8F4")
     private static let white = RGBColor(hex: "FFFFFF")
     private static let accounting = NumberFormatPreset.accounting.code
 
@@ -89,7 +89,7 @@ private struct TemplateBuilder {
                 let cell = CellAddress(row: row, column: column)
                 var body = sheet.formats[cell] ?? CellFormat()
                 if (row - headerRow) % 2 == 0 { body.fillColor = Self.band }
-                body.border.bottom = BorderLine(.thin, color: RGBColor(hex: "D9E1F2"))
+                body.border.bottom = BorderLine(.thin, color: RGBColor(hex: "D5EBDD"))
                 sheet.setFormat(body, at: cell)
             }
         }
@@ -128,7 +128,7 @@ private struct TemplateBuilder {
         totals(row: total - 1, columns: 4)
         sheet.conditionalFormats = [
             ConditionalFormat(ranges: [CellRange(at("D5"), at("D\(total - 1)"))], rule: .cellIs(.lessThan, "0", nil, .lightRedFillDarkRedText)),
-            ConditionalFormat(ranges: [CellRange(at("C5"), at("C\(total - 1)"))], rule: .dataBar(RGBColor(hex: "638EC6")!)),
+            ConditionalFormat(ranges: [CellRange(at("C5"), at("C\(total - 1)"))], rule: .dataBar(RGBColor(hex: "4CC38A")!)),
         ]
         sheet.columnWidths = [0: 150, 1: 110, 2: 110, 3: 110]
         sheet.frozenRows = 4

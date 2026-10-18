@@ -3,6 +3,8 @@
 A spreadsheet app for macOS and iOS that opens and saves Excel workbooks (`.xlsx`, and `.xlsm` read-only).
 One Swift engine (`SheetCore`) and one SwiftUI interface (`SheetUI`) serve both platforms.
 
+![Figures on macOS: a budget table with a live chart, a text box and the Format inspector](docs/screenshot.png)
+
 ## Build
 
 | Target | Requirement | Command |
@@ -10,6 +12,7 @@ One Swift engine (`SheetCore`) and one SwiftUI interface (`SheetUI`) serve both 
 | Mac app | Command Line Tools | `./scripts/build-mac-app.sh`, then `open build/Figures.app` |
 | iPhone / iPad app | Full Xcode | `cd Apple && xcodegen && open Figures.xcodeproj`, choose **Figures-iOS**, set your team, Run |
 | Engine checks | Command Line Tools | `swift run SheetCoreChecks` |
+| Interface snapshot | Command Line Tools | `swift run FiguresSnapshot file.xlsx out.png` (`FIGURES_DARK=1` for Dark Mode) |
 | Inspect any workbook | Command Line Tools | `swift run SheetCoreChecks file.xlsx` (set `FIGURES_VERBOSE=1` to list failing formulas) |
 | Sample workbook | Command Line Tools | `swift run SheetCoreChecks --tour Samples/Tour.xlsx` |
 | Calculation benchmark | Command Line Tools | `swift run -c release SheetCoreChecks --bench` |
@@ -26,30 +29,36 @@ hidden rows and columns, merged cells, frozen rows, gridlines, AutoFilter, and c
 Checked against Apache POI's 356 test workbooks: 333 open. The rest are intentionally corrupt fuzzing
 files, XML-bomb tests and two encrypted or Excel 97–2003 files, which get a clear message instead.
 
-Not read: charts, images, shapes, comments, pivot tables, tables' structured references (`Table1[Amount]`),
+Not read from Excel files: Excel's own charts, images and shapes (Figures' canvas objects are saved in a
+Figures section of the file that Excel ignores), comments, pivot tables, tables' structured references (`Table1[Amount]`),
 data validation, icon sets, rich text within a cell (the text is kept, its mixed formatting is not),
 external workbook links, and macros (`.xlsm` opens, saves as `.xlsx`).
 
-## Ribbon
+## Interface
 
-| Tab | Groups |
-|---|---|
-| Home | Clipboard (paste, cut, copy, Format Painter, Paste Special, undo, redo) · Font (family, size, bold, italic, underline, strikethrough, borders, fill and font colors) · Alignment (top/middle/bottom, left/center/right, wrap, indent, merge) · Number (presets with previews, custom codes, accounting, percent, comma, decimals) · Styles (conditional formatting, cell styles) · Cells (insert, delete, format, hide/unhide, autofit) · Editing (AutoSum, Fill Down, Clear, Sort & Filter, Find) |
-| Insert | Templates · Controls (checkbox, star rating, pop-up menu, stepper, slider) · Rows, columns, sheets · Column, bar, line and pie charts · Today and Now · Functions by category |
-| Formulas | AutoSum · Function library by category · Defined names · Show Formulas |
-| Data | Sort · Filter · Clear filter · Summarize by Category · Remove Duplicates · Find & Replace |
-| View | Gridlines · Show Formulas · Zoom · Freeze panes |
+Figures is laid out like a Mac app rather than a copy of Excel:
 
-Numbers-style extras: checkboxes, star ratings, pop-up menus, steppers and sliders in cells; templates
-(budget, invoice, checklist, weekly planner, grade book, reading list); table styles; AutoFill by dragging the
-selection's corner; Summarize by Category; and Quick Calculations (Sum, Average, Min, Max, Count).
+- **Toolbar:** Zoom and view options, Undo and Redo, then Insert, Table, Chart, Text, Shape, Media, Controls and
+  Formula, then Organize, Format and Share.
+- **Sheet tabs** sit above the grid; click + to add a sheet, double-click a tab to rename it.
+- **Format inspector** (right): Cell (data format, fill, borders, controls, merge, conditional highlighting), Text
+  (font, size, style, color, alignment, wrap, indent, cell styles), Table (table styles, rows and columns, frozen
+  header rows, gridlines, sizing and hidden rows) and Object (position, size, colors and chart settings).
+- **Organize inspector:** sort, filter, Summarize by Category, remove duplicates, find and replace, and a list of
+  the sheet's highlighting rules.
+- **Canvas:** live charts, text boxes, shapes and pictures float over the cells; drag to move, drag the corner
+  handle to resize, Delete to remove. Charts follow their data as it changes and as rows are inserted.
+- **Share** sends a copy of the workbook as an `.xlsx` file through the system share menu.
+- **Status bar:** Quick Calculations (Sum, Average, Min, Max, Count) for the selection, and zoom.
 
-Also: filter dropdowns, right-click menus on cells and headers, column and row resizing, a Name Box that jumps
-to cells or names, formula autocomplete with argument hints, text that overflows into empty neighbors, and a
-status bar with Sum/Average/Count and zoom.
+The sheet itself stays white in Dark Mode, so workbook colors look as their authors intended.
 
-Shortcuts: ⌘B ⌘I ⌘U · ⌘D fill down · ⌘R fill right · ⌘F find · ⌘1 format cells · ⌘; date · ⇧⌘; time · ⇧⌘L filter ·
-⌃⇧4 currency · ⌃⇧5 percent · ⌘= / ⌘− zoom · Esc cancels editing or Format Painter.
+Also: cell controls (checkboxes, star ratings, pop-up menus, steppers, sliders), templates, table styles,
+AutoFill by dragging the selection's corner, filter dropdowns, right-click menus on cells and headers, column
+and row resizing, a Name Box that jumps to cells or names, and formula autocomplete with argument hints.
+
+Shortcuts: ⌘B ⌘I ⌘U · ⌘D fill down · ⌘R fill right · ⌘F find · ⌘1 format cells · ⌘; date · ⇧⌘; time ·
+⇧⌘L filter · ⌃⇧4 currency · ⌃⇧5 percent · ⌘= / ⌘− zoom · Delete removes a selected object · Esc cancels.
 
 ## Formulas
 
@@ -59,7 +68,7 @@ INDIRECT and OFFSET. Inserting or deleting rows and columns updates references o
 
 ## Not yet supported
 
-Saved charts (charts are previews), dynamic array formulas, structured table references, data validation,
+Exporting canvas objects as Excel drawings, real-time collaboration, dynamic array formulas, structured table references, data validation,
 comments, frozen columns, printing, and sheet renames updating formulas that refer to the old name.
 
 ## Privacy
