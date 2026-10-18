@@ -56,3 +56,21 @@ INDIRECT and OFFSET. Inserting or deleting rows and columns updates references o
 
 Saved charts (charts are previews), dynamic array formulas, structured table references, data validation,
 comments, frozen columns, printing, and sheet renames updating formulas that refer to the old name.
+
+## Privacy
+
+Figures works entirely on your device. It collects no data, has no analytics and makes no network requests.
+
+## License
+
+The source code is available under the [MIT License](LICENSE). Copyright © 2026 Tarik Naeem.
+Contributions are accepted under the same license.
+
+The **Figures** name and the Grid F app icon identify this project and are not licensed under the MIT
+License. Forks and other distributions must use a different name and icon.
+
+Figures is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft
+Corporation. Microsoft and Excel are trademarks of the Microsoft group of companies; they are mentioned
+only to describe file compatibility.
+
+Security problems: see [SECURITY.md](SECURITY.md).
