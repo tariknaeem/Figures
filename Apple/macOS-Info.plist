@@ -6,30 +6,6 @@
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
 	<string>Figures</string>
-	<key>CFBundleExecutable</key>
-	<string>Figures</string>
-	<key>CFBundleIconFile</key>
-	<string>Figures</string>
-	<key>CFBundleIdentifier</key>
-	<string>local.figures.Figures</string>
-	<key>CFBundleInfoDictionaryVersion</key>
-	<string>6.0</string>
-	<key>CFBundleName</key>
-	<string>Figures</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
-	<key>CFBundleVersion</key>
-	<string>1</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 Tarik Naeem. Released under the MIT License. Provided as is, without warranty.</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -69,18 +45,42 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleExecutable</key>
+	<string>Figures</string>
+	<key>CFBundleIconFile</key>
+	<string>Figures</string>
+	<key>CFBundleIdentifier</key>
+	<string>local.figures.Figures</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Figures</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 Tarik Naeem. Released under the MIT License. Provided as is, without warranty.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
 	<key>UTImportedTypeDeclarations</key>
 	<array>
 		<dict>
-			<key>UTTypeIdentifier</key>
-			<string>org.openxmlformats.spreadsheetml.sheet</string>
-			<key>UTTypeDescription</key>
-			<string>Excel Workbook</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>
 				<string>public.content</string>
 			</array>
+			<key>UTTypeDescription</key>
+			<string>Excel Workbook</string>
+			<key>UTTypeIdentifier</key>
+			<string>org.openxmlformats.spreadsheetml.sheet</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
