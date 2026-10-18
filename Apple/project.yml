@@ -36,6 +36,7 @@ targets:
       path: iOS-Info.plist
       properties:
         CFBundleDisplayName: Figures
+        NSHumanReadableCopyright: © 2026 Tarik Naeem. Released under the MIT License.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}

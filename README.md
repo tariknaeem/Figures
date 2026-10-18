@@ -60,17 +60,24 @@ comments, frozen columns, printing, and sheet renames updating formulas that ref
 ## Privacy
 
 Figures works entirely on your device. It collects no data, has no analytics and makes no network requests.
+See [PRIVACY.md](PRIVACY.md).
+
+## Important
+
+Figures is provided as is, without warranty. Check important calculations independently, and keep a backup of
+any workbook before saving it in Figures, because features it does not support are not kept. See
+[DISCLAIMER.md](DISCLAIMER.md).
 
 ## License
 
 The source code is available under the [MIT License](LICENSE). Copyright © 2026 Tarik Naeem.
-Contributions are accepted under the same license.
 
-The **Figures** name and the Grid F app icon identify this project and are not licensed under the MIT
-License. Forks and other distributions must use a different name and icon.
+The **Figures** name and the Grid F app icon are not licensed under the MIT License; see
+[TRADEMARKS.md](TRADEMARKS.md). Forks and modified versions must use a different name and icon.
 
 Figures is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft
-Corporation. Microsoft and Excel are trademarks of the Microsoft group of companies; they are mentioned
-only to describe file compatibility.
+Corporation or Apple Inc. Microsoft and Excel are trademarks of the Microsoft group of companies; they are
+mentioned only to describe file compatibility. Figures contains no Microsoft code.
 
-Security problems: see [SECURITY.md](SECURITY.md).
+Contributions are welcome under the terms in [CONTRIBUTING.md](CONTRIBUTING.md). Security problems: see
+[SECURITY.md](SECURITY.md).
