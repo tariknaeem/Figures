@@ -12,6 +12,7 @@ One Swift engine (`SheetCore`) and one SwiftUI interface (`SheetUI`) serve both 
 | Engine checks | Command Line Tools | `swift run SheetCoreChecks` |
 | Inspect any workbook | Command Line Tools | `swift run SheetCoreChecks file.xlsx` (set `FIGURES_VERBOSE=1` to list failing formulas) |
 | Sample workbook | Command Line Tools | `swift run SheetCoreChecks --tour Samples/Tour.xlsx` |
+| Calculation benchmark | Command Line Tools | `swift run -c release SheetCoreChecks --bench` |
 
 ## Opening Excel files
 

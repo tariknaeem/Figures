@@ -4,6 +4,53 @@ import SheetCore
 // Engine checks. Run with `swift run SheetCoreChecks`; exits non-zero on failure.
 // With file arguments, reports how each workbook was read instead: `swift run SheetCoreChecks a.xlsx`.
 // `swift run SheetCoreChecks --tour Tour.xlsx` writes a workbook that shows off the formatting features.
+// `swift run -c release SheetCoreChecks --bench` times calculation on a large workbook.
+
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--bench" {
+    func seconds(_ body: () -> Void) -> Double {
+        let start = DispatchTime.now().uptimeNanoseconds
+        body()
+        return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+    }
+    func ms(_ s: Double) -> String { String(format: "%8.1f ms", s * 1000) }
+
+    let rows = 5_000
+    var sheet = Sheet(name: "Data")
+    for r in 1...rows {
+        sheet.cells[CellAddress(row: r - 1, column: 0)] = String(r)
+        sheet.cells[CellAddress(row: r - 1, column: 1)] = "=A\(r)*2"
+        sheet.cells[CellAddress(row: r - 1, column: 2)] = r == 1 ? "=B1" : "=C\(r - 1)+B\(r)"
+        sheet.cells[CellAddress(row: r - 1, column: 3)] = "=IF(MOD(A\(r),3)=0,\"fizz\",A\(r))"
+        if r <= 200 {
+            sheet.cells[CellAddress(row: r - 1, column: 4)] = "=VLOOKUP(\(r * 7),A:B,2,FALSE)"
+            sheet.cells[CellAddress(row: r - 1, column: 5)] = "=SUM(B:B)/COUNT(A:A)"
+        }
+    }
+    var workbook = Workbook(sheets: [sheet])
+    let all = Array(workbook.sheets[0].cells.keys).sorted()
+    let viewport = (0..<45).flatMap { r in (0..<12).map { CellAddress(row: r, column: $0) } }
+    print("Workbook: \(all.count) cells, \(all.filter { workbook.sheets[0].cells[$0]!.hasPrefix("=") }.count) formulas")
+
+    var calculator = Calculator(workbook: workbook)
+    print("Cold: calculate every cell        ", ms(seconds { for a in all { _ = calculator.value(sheet: 0, at: a) } }))
+    print("Cold: one screen of display text   ", ms(seconds { for a in viewport { _ = calculator.displayText(sheet: 0, at: a) } }))
+
+    // An edit near the top, as when typing into a cell.
+    var edits: [Double] = []
+    for (i, address) in [CellAddress(row: 9, column: 0), CellAddress(row: 3_000, column: 0), CellAddress(row: 20, column: 6)].enumerated() {
+        let previous = calculator
+        workbook.sheets[0].cells[address] = String(1_000 + i)
+        edits.append(seconds {
+            calculator = Calculator.updating(previous, for: workbook)
+            for a in viewport { _ = calculator.displayText(sheet: 0, at: a) }
+        })
+    }
+    print("After an edit: refresh one screen  ", edits.map(ms).joined(separator: " "))
+    let fresh = Calculator(workbook: workbook)
+    print("Values match a full recalculation: ",
+          all.allSatisfy { calculator.value(sheet: 0, at: $0) == fresh.value(sheet: 0, at: $0) } ? "yes" : "NO")
+    exit(0)
+}
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--tour" {
     func at(_ a1: String) -> CellAddress { CellAddress(a1: a1)! }
@@ -484,6 +531,45 @@ check("nf fewer decimals", ExcelNumberFormat.adjustingDecimals("0.0%", by: -1), 
 check("nf decimals two sections", ExcelNumberFormat.adjustingDecimals("0.00;(0.00)", by: 1), "0.000;(0.000)")
 check("theme tint", ColorCheck.tint("4472C4", 0.3999), "8FAADC")
 check("theme tint dark", ColorCheck.tint("ED7D31", -0.2499), "C55A11")
+
+// Incremental recalculation must always agree with calculating from scratch.
+do {
+    var seed: UInt64 = 0x5EED
+    func next(_ bound: Int) -> Int {
+        seed = seed &* 6364136223846793005 &+ 1442695040888963407
+        return Int((seed >> 33) % UInt64(bound))
+    }
+    var book = Workbook(sheets: [Sheet(name: "Main"), Sheet(name: "Other")])
+    book.definedNames = [DefinedName(name: "Base", formula: "Other!$A$1")]
+    let formulas = [
+        "=A1+B2", "=SUM(A:A)", "=SUM(A1:C5)*2", "=Other!A1+Other!B3", "=VLOOKUP(3,A1:B10,2,FALSE)",
+        "=COUNTIF(B:B,\">2\")", "=IF(A2>5,C3,D4)", "=Base*2", "=SUMIFS(B1:B10,A1:A10,\">1\")",
+        "=INDEX(A1:A10,MATCH(4,B1:B10,0))", "=MAX(Other!A1:B5)", "=CONCAT(A1:A4)", "=SUBTOTAL(9,A1:A10)",
+        "=IFERROR(1/C2,0)", "=OFFSET(A1,1,1)", "=INDIRECT(\"B\"&2)", "=C1+D1", "=AVERAGE(D:D)",
+    ]
+    var calc = Calculator(workbook: book)
+    var mismatches = 0
+    for step in 0..<300 {
+        let sheet = next(4) == 0 ? 1 : 0
+        let address = CellAddress(row: next(10), column: next(5))
+        switch next(10) {
+        case 0...4: book.sheets[sheet].setInput(String(next(20) - 5), at: address)
+        case 5...7: book.sheets[sheet].setInput(formulas[next(formulas.count)], at: address)
+        case 8: book.sheets[sheet].setInput("", at: address)
+        default: book.sheets[sheet].setInput("text\(next(3))", at: address)
+        }
+        let previous = calc
+        calc = Calculator.updating(previous, for: book)
+        // Read in a shuffled order so cached and fresh values meet in different sequences.
+        let fresh = Calculator(workbook: book)
+        let addresses = (0..<2).flatMap { s in (0..<10).flatMap { r in (0..<5).map { (s, CellAddress(row: r, column: $0)) } } }
+        for (s, a) in addresses.sorted(by: { _, _ in next(2) == 0 }) where calc.value(sheet: s, at: a) != fresh.value(sheet: s, at: a) {
+            mismatches += 1
+            if mismatches <= 3 { print("FAIL incremental step \(step) \(book.sheets[s].name)!\(a.a1): \(calc.value(sheet: s, at: a)) vs \(fresh.value(sheet: s, at: a))") }
+        }
+    }
+    check("incremental recalculation matches full", mismatches, 0)
+}
 
 // Formula autocomplete
 check("assist prefix", FormulaAssist(text: "=SUM(A1)+VL").suggestions.map(\.name), ["VLOOKUP"])

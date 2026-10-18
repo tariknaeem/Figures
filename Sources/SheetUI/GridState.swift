@@ -46,6 +46,22 @@ final class GridModel: ObservableObject {
     var resizingRow: (row: Int, startHeight: CGFloat)?
     let cache = CalculationCache()
     let undoTarget = UndoTarget()
+    let actions = GridActions()
+    var layout: GridLayout?
+    private var boundsCache: (version: UUID, sheet: Int, row: Int, column: Int)?
+
+    /// The last used row and column of a sheet, computed once per workbook version.
+    func bounds(of workbook: Workbook, sheet: Int) -> (row: Int, column: Int) {
+        if let cached = boundsCache, cached.version == workbook.version, cached.sheet == sheet { return (cached.row, cached.column) }
+        var row = 0
+        var column = 0
+        for address in workbook.sheets[sheet].cells.keys {
+            row = max(row, address.row)
+            column = max(column, address.column)
+        }
+        boundsCache = (workbook.version, sheet, row, column)
+        return (row, column)
+    }
 }
 
 /// The active cell plus the corner where a shift-selection started.
@@ -98,7 +114,8 @@ final class CalculationCache {
 
     func calculator(for workbook: Workbook) -> Calculator {
         if let calculator, version == workbook.version { return calculator }
-        let fresh = Calculator(workbook: workbook)
+        // Keep every result the edit cannot have changed.
+        let fresh = calculator.map { Calculator.updating($0, for: workbook) } ?? Calculator(workbook: workbook)
         calculator = fresh
         version = workbook.version
         return fresh

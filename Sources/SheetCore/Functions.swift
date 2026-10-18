@@ -2,6 +2,7 @@ import Foundation
 
 extension Calculator {
     func call(_ name: String, _ args: [Expr], _ sheet: Int) -> CellValue {
+        if Calculator.volatileFunctions.contains(name) { markVolatile() }
         do {
             return try callThrowing(name, args, sheet)
         } catch let error as CellError {
@@ -262,8 +263,23 @@ extension Calculator {
     func lookupOffset(_ target: CellValue, in range: CellRange, sheet: Int, matchType: Int) throws -> Int {
         let vertical = range.columnCount == 1
         guard vertical || range.rowCount == 1 else { throw CellError.notAvailable }
+        let entries = cells(in: range, sheet: sheet)
+        // Exact matches use a hash index of the range, built once per calculation.
+        if matchType == 0, let key = LookupKey(target) {
+            let rangeKey = RangeKey(sheet: sheet, range: range)
+            if lookupIndexes[rangeKey] == nil {
+                var index: [LookupKey: Int] = [:]
+                for (address, v) in entries {
+                    guard let entryKey = LookupKey(v), index[entryKey] == nil else { continue }
+                    index[entryKey] = vertical ? address.row - range.start.row : address.column - range.start.column
+                }
+                lookupIndexes[rangeKey] = index
+            }
+            guard let offset = lookupIndexes[rangeKey]![key] else { throw CellError.notAvailable }
+            return offset
+        }
         var best: Int?
-        scan: for (address, v) in cells(in: range, sheet: sheet) {
+        scan: for (address, v) in entries {
             let offset = vertical ? address.row - range.start.row : address.column - range.start.column
             guard Calculator.rank(v) == Calculator.rank(target) else { continue }
             let order = Calculator.compare(v, target)

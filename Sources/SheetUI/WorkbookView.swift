@@ -177,95 +177,51 @@ public struct WorkbookView: View {
         }
     }
 
-    // MARK: - Grid layout
+    // MARK: - Grid
 
     var rowCount: Int {
-        min(CellAddress.maxRows, max(200, (sheet.maxRow ?? 0) + 50, selection.active.row + 30))
+        min(CellAddress.maxRows, max(200, model.bounds(of: workbook, sheet: activeSheet).row + 50, selection.active.row + 30))
     }
 
     var columnCount: Int {
-        min(CellAddress.maxColumns, max(26, (sheet.maxColumn ?? 0) + 5, selection.active.column + 5))
+        min(CellAddress.maxColumns, max(26, model.bounds(of: workbook, sheet: activeSheet).column + 5, selection.active.column + 5))
+    }
+
+    /// The sheet's layout and cell appearance, rebuilt only when the workbook, zoom or shown columns change.
+    var layout: GridLayout {
+        let key = GridLayout.Key(version: workbook.version, sheet: activeSheet, zoom: model.zoom,
+                                 showFormulas: model.showFormulas, columnCount: columnCount)
+        if let layout = model.layout, layout.key == key { return layout }
+        let layout = GridLayout(key: key, workbook: workbook, calculator: calculator)
+        model.layout = layout
+        return layout
     }
 
     func columnWidth(_ column: Int) -> CGFloat {
-        CGFloat(sheet.columnWidths[column] ?? sheet.defaultColumnWidth) * zoom
-    }
-
-    /// Row heights in screen points: the file's height, or one that fits the largest font and wrapped text.
-    private func rowHeights(visibleColumns: [Int]) -> [Int: CGFloat] {
-        var automatic: [Int: Double] = [:]
-        let calc = calculator
-        for (address, format) in sheet.formats where sheet.rowHeights[address.row] == nil {
-            var points = (format.fontSize ?? workbook.defaultFontSize) * 1.36
-            if format.wrapText, sheet.merge(containing: address) == nil {
-                let text = calc.displayText(sheet: activeSheet, at: address)
-                let size = format.fontSize ?? workbook.defaultFontSize
-                let width = (sheet.columnWidths[address.column] ?? sheet.defaultColumnWidth) / Double(Self.pointScale)
-                let lines = max(1, (Double(text.count) * size * 0.55 / max(width - 4, 10)).rounded(.up))
-                points = max(points, lines * size * 1.3 + 3)
-            }
-            automatic[address.row] = max(automatic[address.row] ?? 0, points)
-        }
-        var heights: [Int: CGFloat] = [:]
-        for (row, points) in automatic where points > sheet.defaultRowHeight {
-            heights[row] = CGFloat(points) * Self.pointScale * zoom
-        }
-        for (row, points) in sheet.rowHeights {
-            heights[row] = CGFloat(points) * Self.pointScale * zoom
-        }
-        return heights
-    }
-
-    /// Where merged areas start and which cells they cover.
-    struct MergeMap {
-        var areaAt: [CellAddress: CellRange] = [:]
-        var originOf: [CellAddress: CellAddress] = [:]
-
-        init(_ merges: [CellRange]) {
-            for merge in merges where merge.cellCount <= 20_000 {
-                areaAt[merge.start] = merge
-                for address in merge.addresses where address != merge.start { originOf[address] = merge.start }
-            }
-        }
-    }
-
-    /// Everything a row needs to draw its cells.
-    struct RowContext {
-        let calc: Calculator
-        let merges: MergeMap
-        let columns: [Int]
-        let height: (Int) -> CGFloat
-        /// Widths of text that overflows into empty cells to its right, by starting column.
-        var spill: [Int: CGFloat] = [:]
-        /// Columns whose cell lies under overflowing text.
-        var spillCovered: Set<Int> = []
+        layout.width(column)
     }
 
     private var grid: some View {
-        let calc = calculator
-        let hidden = calc.hiddenRows(sheet: activeSheet)
+        let layout = layout
         let rows = rowCount
-        let columns = (0..<columnCount).filter { !sheet.hiddenColumns.contains($0) }
         let frozen = min(sheet.frozenRows, rows)
-        let heights = rowHeights(visibleColumns: columns)
-        let defaultHeight = CGFloat(sheet.defaultRowHeight) * Self.pointScale * zoom
-        let height: (Int) -> CGFloat = { heights[$0] ?? defaultHeight }
-        let context = RowContext(calc: calc, merges: MergeMap(sheet.merges), columns: columns, height: height)
-        let bodyRows = (frozen..<rows).filter { !hidden.contains($0) }
-        let frozenRows = (0..<frozen).filter { !hidden.contains($0) }
+        let bodyRows = (frozen..<rows).filter { !layout.hidden.contains($0) }
+        let frozenRows = (0..<frozen).filter { !layout.hidden.contains($0) }
+        let context = RowContext(selection: selection, editor: editor, filter: sheet.filter, openFilterColumn: model.filterColumn)
+        configureActions()
 
         return ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical]) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     Section {
                         ForEach(bodyRows, id: \.self) { row in
-                            gridRow(row, context)
+                            rowView(row, layout, context)
                         }
                     } header: {
                         VStack(alignment: .leading, spacing: 0) {
-                            columnHeader(columns)
+                            columnHeader(layout.columns)
                             ForEach(frozenRows, id: \.self) { row in
-                                gridRow(row, context)
+                                rowView(row, layout, context)
                             }
                             if frozen > 0 {
                                 Rectangle().fill(Color.gray.opacity(0.7)).frame(height: 1.5)
@@ -294,45 +250,99 @@ public struct WorkbookView: View {
         #endif
     }
 
-    private func gridRow(_ row: Int, _ base: RowContext) -> some View {
-        let context = spills(row, base)
-        let height = context.height(row)
-        return HStack(spacing: 0) {
-            rowHeader(row, height: height)
-            ForEach(context.columns, id: \.self) { column in
-                cell(CellAddress(row: row, column: column), height: height, context)
+    /// What every row needs to know about the window, read once per update.
+    private struct RowContext {
+        let selection: GridSelection
+        let editor: CellEditor?
+        let filter: AutoFilter?
+        let openFilterColumn: Int?
+    }
+
+    private func rowView(_ row: Int, _ layout: GridLayout, _ context: RowContext) -> some View {
+        let range = context.selection.range
+        let inRows = (range.start.row...range.end.row).contains(row)
+        var selection = RowSelection(headerSelected: inRows)
+        if context.selection.active.row == row { selection.activeColumn = context.selection.active.column }
+        if range.cellCount > 1, inRows { selection.rangeColumns = range.start.column...range.end.column }
+        let filtered = context.filter.map { !$0.allowedValues.isEmpty && $0.dataRows?.contains(row) == true } ?? false
+        let editor = context.editor.flatMap { $0.inCell && $0.address.row == row ? $0 : nil }
+        let openFilter = context.filter?.range.start.row == row ? context.openFilterColumn : nil
+        return RowView(render: layout.row(row), selection: selection, filtered: filtered, editor: editor,
+                       openFilterColumn: openFilter, zoom: zoom, actions: model.actions, focus: $focus)
+            .equatable()
+    }
+
+    /// Points the row views' callbacks at this window.
+    private func configureActions() {
+        let actions = model.actions
+        actions.perform = { perform($0) }
+        actions.editorText = cellEditorText
+        actions.filterPopover = { column in AnyView(filterPopover(column)) }
+    }
+
+    private func perform(_ command: GridCommand) {
+        switch command {
+        case .tap(let address): cellTapped(address)
+        case .cut: _ = cutSelection()
+        case .copy: _ = copySelection()
+        case .paste: pasteFromSystem()
+        case .pasteSpecial(let kind): pasteSpecial(kind)
+        case .insertRows(let below): insertRows(below: below)
+        case .insertColumns(let right): insertColumns(right: right)
+        case .deleteRows: deleteRows()
+        case .deleteColumns: deleteColumns()
+        case .clearContents: clearSelection()
+        case .sort(let ascending): sortSelection(ascending: ascending)
+        case .filterBySelection: filterBySelectedValue()
+        case .merge: mergeSelection(center: true, across: false)
+        case .unmerge: unmergeSelection()
+        case .formatCells: showCustomFormat()
+        case .openFilter(let column): model.filterColumn = column
+        case .closeFilter: model.filterColumn = nil
+        case .selectRow(let row): selectRow(row)
+        case .rowMenu(let item, let row):
+            selectRow(row)
+            switch item {
+            case .insertAbove: insertRows(below: false)
+            case .insertBelow: insertRows(below: true)
+            case .delete: deleteRows()
+            case .hide: hideRows()
+            case .unhide: unhideRows()
+            case .autofit: autofitRows()
+            }
+        case .resizeRow(let row, let startHeight, let translation):
+            if model.resizingRow?.row != row { model.resizingRow = (row, startHeight) }
+            let screen = max(6, (model.resizingRow?.startHeight ?? startHeight) + translation)
+            workbook.sheets[activeSheet].rowHeights[row] = Double(screen / (Self.pointScale * zoom))
+        case .endRowResize: model.resizingRow = nil
+        case .commitEdit(let rows, let columns): commitEdit(moveRows: rows, moveColumns: columns)
+        case .cancelEdit: cancelEdit()
+        case .editorTab:
+            guard let editor else { return }
+            let assist = FormulaAssist(text: editor.text)
+            if let first = assist.suggestions.first {
+                acceptSuggestion(first.name, replacing: assist.prefix)
+            } else {
+                commitEdit(moveRows: 0, moveColumns: 1)
             }
         }
     }
 
-    /// Text in General or left alignment runs into empty cells to the right, as in Excel.
-    private func spills(_ row: Int, _ base: RowContext) -> RowContext {
-        var context = base
-        let columns = base.columns
-        var index = 0
-        while index < columns.count {
-            let address = CellAddress(row: row, column: columns[index])
-            index += 1
-            guard sheet.cells[address] != nil, base.merges.areaAt[address] == nil, base.merges.originOf[address] == nil else { continue }
-            let format = sheet.formats[address] ?? CellFormat()
-            guard !format.wrapText, format.alignment == .general || format.alignment == .left,
-                  case .text(let text) = base.calc.value(sheet: activeSheet, at: address) else { continue }
-            let fontSize = CGFloat(format.fontSize ?? workbook.defaultFontSize) * Self.pointScale * zoom
-            let needed = CGFloat(text.count) * fontSize * 0.56 + 8 * zoom + CGFloat(format.indent) * 9 * zoom
-            var total = columnWidth(address.column)
-            var next = index
-            while total < needed, next < columns.count, next - index < 12 {
-                let neighbor = CellAddress(row: row, column: columns[next])
-                guard sheet.cells[neighbor] == nil, base.merges.areaAt[neighbor] == nil,
-                      base.merges.originOf[neighbor] == nil else { break }
-                total += columnWidth(neighbor.column)
-                context.spillCovered.insert(neighbor.column)
-                next += 1
-            }
-            if next > index { context.spill[address.column] = total }
-            index = next
-        }
-        return context
+    private func filterPopover(_ column: Int) -> some View {
+        FilterPopover(
+            values: filterValues(column),
+            allowed: sheet.filter?.allowedValues[column],
+            onSort: { ascending in
+                model.filterColumn = nil
+                sortFilter(byColumn: column, ascending: ascending)
+            },
+            onApply: { allowed in
+                model.filterColumn = nil
+                applyFilter(column: column, allowed: allowed)
+            },
+            onCancel: { model.filterColumn = nil }
+        )
+        .environment(\.colorScheme, .light)
     }
 
     private var headerLine: some View {
@@ -385,288 +395,12 @@ public struct WorkbookView: View {
             #endif
     }
 
-    private func rowHeader(_ row: Int, height: CGFloat) -> some View {
-        let selected = (selection.range.start.row...selection.range.end.row).contains(row)
-        let filtered = sheet.filter?.allowedValues.isEmpty == false && sheet.filter?.dataRows?.contains(row) == true
-        return Text(String(row + 1))
-            .font(.system(size: 11 * zoom, weight: selected ? .semibold : .regular).monospacedDigit())
-            .foregroundStyle(filtered ? Color.accentColor : Color(white: 0.35))
-            .frame(width: Self.rowHeaderWidth, height: height)
-            .background(selected ? Color.accentColor.opacity(0.18) : Self.headerBackground)
-            .overlay(headerLine)
-            .contentShape(Rectangle())
-            .onTapGesture { selectRow(row) }
-            .contextMenu { rowMenu(row) }
-            .overlay(alignment: .bottom) { rowResizeHandle(row, height: height) }
-    }
-
-    private func rowResizeHandle(_ row: Int, height: CGFloat) -> some View {
-        Color.clear
-            .frame(height: 6)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                    .onChanged { drag in
-                        if model.resizingRow?.row != row { model.resizingRow = (row, height) }
-                        let screen = max(6, (model.resizingRow?.startHeight ?? height) + drag.translation.height)
-                        workbook.sheets[activeSheet].rowHeights[row] = Double(screen / (Self.pointScale * zoom))
-                    }
-                    .onEnded { _ in model.resizingRow = nil }
-            )
-            #if os(macOS)
-            .onHover { inside in
-                if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
-            }
-            #endif
-    }
-
-    // MARK: - Cells
-
-    @ViewBuilder
-    private func cell(_ address: CellAddress, height: CGFloat, _ context: RowContext) -> some View {
-        let width = columnWidth(address.column)
-        let inRange = selection.range.cellCount > 1 && selection.range.contains(address)
-        if context.merges.originOf[address] != nil {
-            // Covered by a merged area that the top-left cell draws; stays transparent but clickable.
-            Color.clear
-                .frame(width: width, height: height)
-                .overlay(inRange ? Color.accentColor.opacity(0.14) : Color.clear)
-                .contentShape(Rectangle())
-                .onTapGesture { cellTapped(address) }
-                .contextMenu { cellMenu }
-                .id(address)
-        } else {
-            let merge = context.merges.areaAt[address]
-            let faceWidth = merge.map { mergedWidth($0) } ?? width
-            let faceHeight = merge.map { mergedHeight($0, context.height) } ?? height
-            Color.clear
-                .frame(width: width, height: height)
-                .overlay(alignment: .topLeading) {
-                    face(address, width: faceWidth, height: faceHeight, context: context)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { cellTapped(address) }
-                .contextMenu { cellMenu }
-                .id(address)
-        }
-    }
-
-    private func mergedWidth(_ merge: CellRange) -> CGFloat {
-        (merge.start.column...merge.end.column).filter { !sheet.hiddenColumns.contains($0) }.reduce(0) { $0 + columnWidth($1) }
-    }
-
-    private func mergedHeight(_ merge: CellRange, _ height: (Int) -> CGFloat) -> CGFloat {
-        let hidden = calculator.hiddenRows(sheet: activeSheet)
-        return (merge.start.row...merge.end.row).filter { !hidden.contains($0) }.reduce(0) { $0 + height($1) }
-    }
-
-    /// What a cell (or merged area) shows: fill, conditional formatting, text, gridlines, borders and selection.
-    @ViewBuilder
-    private func face(_ address: CellAddress, width: CGFloat, height: CGFloat, context: RowContext) -> some View {
-        let format = sheet.formats[address] ?? CellFormat()
-        let isActive = selection.active == address
-        let inRange = selection.range.cellCount > 1 && selection.range.contains(address)
-        let spillCovered = context.spillCovered.contains(address.column)
-        let spill = context.spill[address.column]
-        let rightLine = spill == nil && !(spillCovered && context.spillCovered.contains(nextVisibleColumn(after: address.column, context)))
-        let lines = sheet.showGridlines
-
-        if let editor, editor.inCell, editor.address == address {
-            TextField("", text: cellEditorText)
-                .textFieldStyle(.plain)
-                .font(font(for: format, conditional: nil))
-                .foregroundStyle(Color.black)
-                .padding(.horizontal, 3 * zoom)
-                .frame(width: max(width, 120 * zoom), height: height)
-                .background(Color.white)
-                .overlay(Rectangle().stroke(Color.accentColor, lineWidth: 2))
-                .focused($focus, equals: .cellEditor)
-                .onSubmit { commitEdit(moveRows: 1, moveColumns: 0) }
-                .onKeyPress(.tab) {
-                    let assist = FormulaAssist(text: editor.text)
-                    if let first = assist.suggestions.first {
-                        acceptSuggestion(first.name, replacing: assist.prefix)
-                    } else {
-                        commitEdit(moveRows: 0, moveColumns: 1)
-                    }
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    cancelEdit()
-                    return .handled
-                }
-                #if os(macOS)
-                .onExitCommand { cancelEdit() }
-                #endif
-        } else {
-            let value = context.calc.value(sheet: activeSheet, at: address)
-            let conditional = context.calc.conditionalFormatting(sheet: activeSheet, at: address)
-            let shown = model.showFormulas
-                ? FormattedValue(text: sheet.cells[address] ?? "", color: nil)
-                : ExcelNumberFormat.format(value, code: format.numberFormat)
-            let fill = conditional?.scaleColor ?? conditional?.style.fillColor ?? format.fillColor
-            let textColor = conditional?.style.textColor ?? shown.color ?? format.textColor
-            let textAlignment = alignment(for: format, value: value)
-            let textWidth = spill ?? width
-
-            ZStack(alignment: .topLeading) {
-                (fill.map { Color($0) } ?? Color.clear)
-                    .frame(width: width, height: height)
-                if let bar = conditional?.dataBar {
-                    LinearGradient(colors: [Color(bar.color), Color(bar.color).opacity(0.3)], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: max(0, (width - 4) * bar.fraction), height: max(0, height - 4))
-                        .offset(x: 2, y: 2)
-                }
-                Text(shown.text)
-                    .font(font(for: format, conditional: conditional?.style))
-                    .underline(conditional?.style.underline ?? format.underline)
-                    .strikethrough(conditional?.style.strikethrough ?? format.strikethrough)
-                    .foregroundStyle(textColor.map { Color($0) } ?? Color.black)
-                    .lineLimit(format.wrapText ? nil : 1)
-                    .multilineTextAlignment(textAlignment.horizontal == .trailing ? .trailing : (textAlignment.horizontal == .center ? .center : .leading))
-                    .fixedSize(horizontal: false, vertical: format.wrapText)
-                    .padding(.leading, (3 + CGFloat(format.indent) * 9) * zoom)
-                    .padding(.trailing, 3 * zoom)
-                    .frame(width: textWidth, height: height, alignment: textAlignment)
-                    .clipped()
-            }
-            .frame(width: width, height: height, alignment: .topLeading)
-            .overlay(alignment: .bottom) {
-                if lines { Rectangle().fill(Self.gridColor).frame(height: 0.5) }
-            }
-            .overlay(alignment: .trailing) {
-                if lines && rightLine { Rectangle().fill(Self.gridColor).frame(width: 0.5) }
-            }
-            .overlay {
-                if !format.border.isEmpty { CellBorderLines(border: format.border, scale: zoom) }
-            }
-            .overlay(inRange ? Color.accentColor.opacity(0.14) : Color.clear)
-            .overlay {
-                if isActive { Rectangle().stroke(Color.accentColor, lineWidth: 2) }
-            }
-            .overlay(alignment: .trailing) {
-                if isFilterHeader(address) { filterButton(address.column) }
-            }
-        }
-    }
-
-    private func nextVisibleColumn(after column: Int, _ context: RowContext) -> Int {
-        guard let index = context.columns.firstIndex(of: column), index + 1 < context.columns.count else { return -1 }
-        return context.columns[index + 1]
-    }
-
-    func font(for format: CellFormat, conditional: DifferentialStyle?) -> Font {
-        let size = CGFloat(format.fontSize ?? workbook.defaultFontSize) * Self.pointScale * zoom
-        var font = Font.custom(format.fontName ?? workbook.defaultFontName, size: size)
-        if conditional?.bold ?? format.bold { font = font.bold() }
-        if conditional?.italic ?? format.italic { font = font.italic() }
-        return font
-    }
-
-    private func alignment(for format: CellFormat, value: CellValue) -> Alignment {
-        let horizontal: HorizontalAlignment
-        switch format.alignment {
-        case .left: horizontal = .leading
-        case .center: horizontal = .center
-        case .right: horizontal = .trailing
-        case .general:
-            switch value {
-            case .number: horizontal = .trailing
-            case .boolean, .error: horizontal = .center
-            case .empty, .text: horizontal = .leading
-            }
-        }
-        let vertical: VerticalAlignment = switch format.verticalAlignment {
-        case .top: .top
-        case .center: .center
-        case .bottom: .bottom
-        }
-        return Alignment(horizontal: horizontal, vertical: vertical)
-    }
-
-    // MARK: - Filter dropdowns
-
-    private func isFilterHeader(_ address: CellAddress) -> Bool {
-        guard let filter = sheet.filter else { return false }
-        return address.row == filter.range.start.row
-            && (filter.range.start.column...filter.range.end.column).contains(address.column)
-    }
-
-    private func filterButton(_ column: Int) -> some View {
-        let active = sheet.filter?.allowedValues[column] != nil
-        return Button { model.filterColumn = column } label: {
-            Image(systemName: active ? "line.3.horizontal.decrease.circle.fill" : "chevron.down.square")
-                .font(.system(size: 12 * zoom))
-                .foregroundStyle(active ? Color.accentColor : Color.gray)
-                .padding(.trailing, 3)
-        }
-        .buttonStyle(.plain)
-        .help(active ? "Filtered" : "Filter")
-        .popover(isPresented: Binding(get: { model.filterColumn == column }, set: { if !$0 { model.filterColumn = nil } })) {
-            FilterPopover(
-                values: filterValues(column),
-                allowed: sheet.filter?.allowedValues[column],
-                onSort: { ascending in
-                    model.filterColumn = nil
-                    sortFilter(byColumn: column, ascending: ascending)
-                },
-                onApply: { allowed in
-                    model.filterColumn = nil
-                    applyFilter(column: column, allowed: allowed)
-                },
-                onCancel: { model.filterColumn = nil }
-            )
-            .environment(\.colorScheme, .light)
-        }
-    }
-
-    // MARK: - Context menus
-
-    @ViewBuilder
-    private var cellMenu: some View {
-        Button("Cut") { _ = cutSelection() }
-        Button("Copy") { _ = copySelection() }
-        Button("Paste") { pasteFromSystem() }
-        Menu("Paste Special") { pasteSpecialItems }
-        Divider()
-        Menu("Insert") {
-            Button("Rows Above") { insertRows(below: false) }
-            Button("Rows Below") { insertRows(below: true) }
-            Button("Columns Left") { insertColumns(right: false) }
-            Button("Columns Right") { insertColumns(right: true) }
-        }
-        Menu("Delete") {
-            Button("Rows") { deleteRows() }
-            Button("Columns") { deleteColumns() }
-        }
-        Button("Clear Contents") { clearSelection() }
-        Divider()
-        Button("Sort A to Z") { sortSelection(ascending: true) }
-        Button("Sort Z to A") { sortSelection(ascending: false) }
-        Button("Filter by Selected Cell's Value") { filterBySelectedValue() }
-        Divider()
-        Button("Merge & Center") { mergeSelection(center: true, across: false) }
-        Button("Unmerge Cells") { unmergeSelection() }
-        Button("Format Cells…") { showCustomFormat() }
-    }
-
     @ViewBuilder
     var pasteSpecialItems: some View {
         Button("Values") { pasteSpecial(.values) }
         Button("Formulas") { pasteSpecial(.formulas) }
         Button("Formatting") { pasteSpecial(.formats) }
         Button("Transpose") { pasteSpecial(.transpose) }
-    }
-
-    @ViewBuilder
-    private func rowMenu(_ row: Int) -> some View {
-        Button("Insert Row Above") { selectRow(row); insertRows(below: false) }
-        Button("Insert Row Below") { selectRow(row); insertRows(below: true) }
-        Button("Delete Row") { selectRow(row); deleteRows() }
-        Divider()
-        Button("Hide Row") { selectRow(row); hideRows() }
-        Button("Unhide Adjacent Rows") { selectRow(row); unhideRows() }
-        Button("AutoFit Row Height") { selectRow(row); autofitRows() }
     }
 
     @ViewBuilder

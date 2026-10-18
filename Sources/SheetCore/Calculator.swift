@@ -24,16 +24,144 @@ public final class Calculator {
     private var cache: [Key: CellValue] = [:]
     private var inProgress: Set<Key> = []
     private var evaluationStack: [Key] = []
+    /// Each sheet's inputs, so reads do not copy `Sheet` values.
+    private let sheetCells: [[CellAddress: String]]
+
+    // Dependencies recorded while evaluating, so an edit recalculates only what it affects.
+    private var precedents: [Key: Set<Key>] = [:]
+    private var dependents: [Key: Set<Key>] = [:]
+    private var rangeReads: [Key: [(sheet: Int, range: CellRange)]] = [:]
+    /// Formulas that must recalculate after any edit: NOW, TODAY, RAND and friends.
+    private var volatile: Set<Key> = []
+    /// The formula whose range read is in progress; its reads of single cells are covered by the range.
+    private var rangeReader: Key?
+    static let volatileFunctions: Set<String> = ["NOW", "TODAY", "RAND", "RANDBETWEEN", "SUBTOTAL"]
+
+    /// Rows of stored cells per sheet and column, sorted, for scanning large ranges.
+    private var columnIndex: [Int: [Int: [Int]]] = [:]
+    private var hiddenCache: [Int: Set<Int>] = [:]
+
+    struct RangeKey: Hashable {
+        let sheet: Int
+        let range: CellRange
+    }
+
+    /// Values of ranges already read in this calculation, shared by every formula that reads them.
+    private var rangeValues: [RangeKey: [(address: CellAddress, value: CellValue)]] = [:]
+    /// First position of each value in ranges used for exact-match lookups.
+    var lookupIndexes: [RangeKey: [LookupKey: Int]] = [:]
+
+    enum LookupKey: Hashable {
+        case number(Double), text(String), boolean(Bool)
+
+        init?(_ value: CellValue) {
+            switch value {
+            case .number(let n): self = .number(n == 0 ? 0 : n)
+            case .text(let s): self = .text(s.lowercased())
+            case .boolean(let b): self = .boolean(b)
+            case .empty, .error: return nil
+            }
+        }
+    }
+    private lazy var namesByKey: [String: [DefinedName]] = Dictionary(grouping: workbook.definedNames) { $0.name.lowercased() }
 
     /// The formula cell being evaluated, for ROW() and COLUMN() without arguments.
     var currentCell: CellAddress? { evaluationStack.last?.address }
-    private var parsed: [String: Result<Expr, CellError>] = [:]
+    private(set) var parsed: [String: Result<Expr, CellError>] = [:]
     var conditionalCache: [Key: ConditionalResult] = [:]
     private var nameDepth = 0
     var conditionalStats: [String: ConditionalStats] = [:]
 
     public init(workbook: Workbook) {
         self.workbook = workbook
+        sheetCells = workbook.sheets.map(\.cells)
+    }
+
+    /// A calculator for an edited workbook that keeps every result the edit cannot have changed.
+    /// Changes to anything but cell inputs and formats (sheets, names, filters, hidden rows) recalculate everything.
+    public static func updating(_ previous: Calculator, for workbook: Workbook) -> Calculator {
+        let next = Calculator(workbook: workbook)
+        let old = previous.workbook
+        guard old.sheets.count == workbook.sheets.count, old.definedNames == workbook.definedNames,
+              zip(old.sheets, workbook.sheets).allSatisfy({ $0.name == $1.name && $0.hiddenRows == $1.hiddenRows && $0.filter == $1.filter })
+        else { return next }
+
+        var changed: [Key] = []
+        var addedOrRemoved = false
+        for index in workbook.sheets.indices {
+            let before = previous.sheetCells[index]
+            let after = next.sheetCells[index]
+            guard before != after else { continue }
+            for (address, raw) in after where before[address] != raw {
+                changed.append(Key(sheet: index, address: address))
+                if before[address] == nil { addedOrRemoved = true }
+            }
+            for address in before.keys where after[address] == nil {
+                changed.append(Key(sheet: index, address: address))
+                addedOrRemoved = true
+            }
+            // A large paste or import is cheaper to recalculate from scratch.
+            if changed.count > 20_000 { return next }
+        }
+
+        // Range readers indexed by sheet and column; very wide ranges are checked separately.
+        struct RangeColumn: Hashable { let sheet: Int; let column: Int }
+        var byColumn: [RangeColumn: [(reader: Key, range: CellRange)]] = [:]
+        var wide: [(reader: Key, sheet: Int, range: CellRange)] = []
+        for (reader, ranges) in previous.rangeReads {
+            for read in ranges {
+                if read.range.columnCount <= 64 {
+                    for column in read.range.start.column...read.range.end.column {
+                        byColumn[RangeColumn(sheet: read.sheet, column: column), default: []].append((reader, read.range))
+                    }
+                } else {
+                    wide.append((reader, read.sheet, read.range))
+                }
+            }
+        }
+
+        // Everything that depends, directly or through other formulas, on a changed cell.
+        var invalid = Set(changed).union(previous.volatile)
+        var queue = Array(invalid)
+        while let key = queue.popLast() {
+            for dependent in previous.dependents[key] ?? [] where invalid.insert(dependent).inserted {
+                queue.append(dependent)
+            }
+            for read in byColumn[RangeColumn(sheet: key.sheet, column: key.address.column)] ?? []
+            where read.range.contains(key.address) && invalid.insert(read.reader).inserted {
+                queue.append(read.reader)
+            }
+            for read in wide where read.sheet == key.sheet && read.range.contains(key.address) && invalid.insert(read.reader).inserted {
+                queue.append(read.reader)
+            }
+        }
+
+        next.cache = previous.cache.filter { !invalid.contains($0.key) }
+        next.parsed = previous.parsed
+        next.precedents = previous.precedents
+        next.dependents = previous.dependents
+        next.rangeReads = previous.rangeReads
+        next.volatile = previous.volatile
+        if !addedOrRemoved { next.columnIndex = previous.columnIndex }
+        return next
+    }
+
+    /// Notes that the formula being evaluated read a cell.
+    private func recordRead(_ key: Key) {
+        guard let reader = evaluationStack.last, reader != key, reader != rangeReader else { return }
+        precedents[reader, default: []].insert(key)
+        dependents[key, default: []].insert(reader)
+    }
+
+    /// Clears a formula's recorded reads before it is evaluated again.
+    private func resetDependencies(of key: Key) {
+        for precedent in precedents.removeValue(forKey: key) ?? [] { dependents[precedent]?.remove(key) }
+        rangeReads.removeValue(forKey: key)
+        volatile.remove(key)
+    }
+
+    func markVolatile() {
+        if let key = evaluationStack.last { volatile.insert(key) }
     }
 
     /// Evaluates formula text (starting with `=`) as if it were entered in `address`, without storing it.
@@ -48,8 +176,9 @@ public final class Calculator {
 
     public func value(sheet: Int, at address: CellAddress) -> CellValue {
         let key = Key(sheet: sheet, address: address)
+        recordRead(key)
         if let cached = cache[key] { return cached }
-        guard workbook.sheets.indices.contains(sheet), let raw = workbook.sheets[sheet].cells[address] else {
+        guard sheetCells.indices.contains(sheet), let raw = sheetCells[sheet][address] else {
             return .empty
         }
         guard CellInput.isFormula(raw) else {
@@ -61,6 +190,7 @@ public final class Calculator {
         if inProgress.count >= Self.maxDepth { return .error(.number) }
 
         inProgress.insert(key)
+        resetDependencies(of: key)
         evaluationStack.append(key)
         let result: CellValue
         switch formula(raw) {
@@ -85,16 +215,19 @@ public final class Calculator {
     /// Rows hidden by the user plus data rows the AutoFilter excludes.
     public func hiddenRows(sheet index: Int) -> Set<Int> {
         guard workbook.sheets.indices.contains(index) else { return [] }
+        if let cached = hiddenCache[index] { return cached }
         let sheet = workbook.sheets[index]
         var hidden = sheet.hiddenRows
-        guard let filter = sheet.filter, !filter.allowedValues.isEmpty, let rows = filter.dataRows else { return hidden }
-        for row in rows {
-            for (column, allowed) in filter.allowedValues
-            where !allowed.contains(displayText(sheet: index, at: CellAddress(row: row, column: column))) {
-                hidden.insert(row)
-                break
+        if let filter = sheet.filter, !filter.allowedValues.isEmpty, let rows = filter.dataRows {
+            for row in rows {
+                for (column, allowed) in filter.allowedValues
+                where !allowed.contains(displayText(sheet: index, at: CellAddress(row: row, column: column))) {
+                    hidden.insert(row)
+                    break
+                }
             }
         }
+        hiddenCache[index] = hidden
         return hidden
     }
 
@@ -113,15 +246,60 @@ public final class Calculator {
 
     /// Non-empty cells of a range in row-major order.
     public func cells(in range: CellRange, sheet: Int) -> [(address: CellAddress, value: CellValue)] {
-        guard workbook.sheets.indices.contains(sheet) else { return [] }
-        let stored = workbook.sheets[sheet].cells
-        let addresses = range.cellCount <= stored.count
-            ? range.addresses.filter { stored[$0] != nil }
-            : stored.keys.filter(range.contains).sorted()
-        return addresses.compactMap { address in
+        guard sheetCells.indices.contains(sheet) else { return [] }
+        let reader = evaluationStack.last
+        if let reader { rangeReads[reader, default: []].append((sheet, range)) }
+        let rangeKey = RangeKey(sheet: sheet, range: range)
+        if let cached = rangeValues[rangeKey] { return cached }
+        let outerReader = rangeReader
+        rangeReader = reader
+        defer { rangeReader = outerReader }
+        let stored = sheetCells[sheet]
+        let addresses: [CellAddress]
+        if range.cellCount <= 256 {
+            addresses = range.addresses.filter { stored[$0] != nil }
+        } else {
+            addresses = storedAddresses(in: range, sheet: sheet)
+        }
+        let values = addresses.compactMap { address -> (address: CellAddress, value: CellValue)? in
             let value = value(sheet: sheet, at: address)
             return value == .empty ? nil : (address, value)
         }
+        // Results gathered while one of the range's cells is mid-calculation (a cycle) are not reused.
+        if !inProgress.contains(where: { $0.sheet == sheet && range.contains($0.address) }) {
+            rangeValues[rangeKey] = values
+        }
+        return values
+    }
+
+    /// Stored addresses inside a large range, row by row, found by binary search in each column.
+    private func storedAddresses(in range: CellRange, sheet: Int) -> [CellAddress] {
+        if columnIndex[sheet] == nil {
+            var columns: [Int: [Int]] = [:]
+            for address in sheetCells[sheet].keys { columns[address.column, default: []].append(address.row) }
+            for column in columns.keys { columns[column]!.sort() }
+            columnIndex[sheet] = columns
+        }
+        let columns = columnIndex[sheet]!
+        let wanted = range.columnCount <= columns.count
+            ? (range.start.column...range.end.column).filter { columns[$0] != nil }
+            : columns.keys.filter { (range.start.column...range.end.column).contains($0) }.sorted()
+        var result: [CellAddress] = []
+        for column in wanted {
+            let rows = columns[column]!
+            var low = 0
+            var high = rows.count
+            while low < high {
+                let middle = (low + high) / 2
+                if rows[middle] < range.start.row { low = middle + 1 } else { high = middle }
+            }
+            var index = low
+            while index < rows.count, rows[index] <= range.end.row {
+                result.append(CellAddress(row: rows[index], column: column))
+                index += 1
+            }
+        }
+        return wanted.count > 1 ? result.sorted() : result
     }
 
     func formula(_ raw: String) -> Result<Expr, CellError> {
@@ -175,7 +353,7 @@ public final class Calculator {
 
     /// A defined name's value: a sheet-scoped definition wins over a workbook-wide one.
     private func definedName(_ name: String, _ sheet: Int) -> Operand {
-        let matches = workbook.definedNames.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+        let matches = namesByKey[name.lowercased()] ?? []
         guard let definition = matches.first(where: { $0.scope == sheet }) ?? matches.first(where: { $0.scope == nil }) else {
             return .value(.error(.name))
         }
