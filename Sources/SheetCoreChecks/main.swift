@@ -3,7 +3,8 @@ import SheetCore
 
 // Engine checks. Run with `swift run SheetCoreChecks`; exits non-zero on failure.
 // With file arguments, reports how each workbook was read instead: `swift run SheetCoreChecks a.xlsx`.
-// `swift run SheetCoreChecks --tour Tour.xlsx` writes a workbook that shows off the formatting features.
+// `swift run SheetCoreChecks --tour Tour.xlsx` writes a workbook that shows off the formatting features,
+// and `--templates Templates.xlsx` one with every template.
 // `swift run -c release SheetCoreChecks --bench` times calculation on a large workbook.
 
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--bench" {
@@ -50,6 +51,20 @@ if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--bench" {
     print("Values match a full recalculation: ",
           all.allSatisfy { calculator.value(sheet: 0, at: $0) == fresh.value(sheet: 0, at: $0) } ? "yes" : "NO")
     exit(0)
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--templates" {
+    var book = Workbook(sheets: [])
+    for template in SheetTemplate.allCases { book.addSheet(from: template) }
+    book.sheets.removeAll { $0.name == "Sheet1" }
+    do {
+        try XLSXWriter.data(for: book).write(to: URL(fileURLWithPath: CommandLine.arguments[2]))
+        print("Wrote \(CommandLine.arguments[2])")
+        exit(0)
+    } catch {
+        print("Could not write the templates: \(error.localizedDescription)")
+        exit(1)
+    }
 }
 
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--tour" {
@@ -569,6 +584,79 @@ do {
         }
     }
     check("incremental recalculation matches full", mismatches, 0)
+}
+
+// Numbers-style features: controls, autofill, category summaries, templates
+do {
+    func at(_ a1: String) -> CellAddress { CellAddress(a1: a1)! }
+    var controlled = sheet(["A1": "TRUE", "B1": "4", "C1": "Medium", "D1": "3", "E1": "50", "F1": "x"])
+    controlled.controls = [at("A1"): .checkbox, at("A2"): .checkbox, at("B1"): .rating, at("C1"): .popUp(.items(["Low", "Medium", "High"])),
+                           at("D1"): .stepper(minimum: 0, maximum: 10, step: 1), at("E1"): .slider(minimum: 0, maximum: 100, step: 5),
+                           at("F1"): .popUp(.range("$H$1:$H$3")), at("G1"): .popUp(.items(["a,b", "c"]))]
+    controlled.cells[at("H1")] = "red"
+    controlled.cells[at("H2")] = "green"
+    controlled.cells[at("H3")] = "red"
+    let reread = try XLSXReader.workbook(from: XLSXWriter.data(for: Workbook(sheets: [controlled])))
+    check("controls round trip", reread.sheets[0].controls, controlled.controls)
+    check("pop-up range options", Calculator(workbook: reread).popUpOptions(.range("$H$1:$H$3"), sheet: 0), ["red", "green"])
+    check("rating input clamps", CellControl.rating.input(for: .number(9)), "5")
+    check("checkbox input", CellControl.checkbox.input(for: .number(1)), "TRUE")
+    check("stepper clamps", CellControl.stepper(minimum: 0, maximum: 10, step: 1).input(for: .number(-3)), "0")
+
+    var fill = Workbook(sheets: [sheet([
+        "A1": "1", "A2": "3", "B1": "Item 7", "C1": "Mon", "D1": "JANUARY", "E1": "=A1*2", "F1": "x", "F2": "y",
+        "G1": "46313", "H1": "Q09",
+    ])])
+    fill.sheets[0].setFormat(CellFormat(numberFormat: "m/d/yyyy"), at: at("G1"))
+    fill.sheets[0].controls[at("F1")] = .checkbox
+    fill.autofill(sheet: 0, source: CellRange(at("A1"), at("A2")), target: CellRange(at("A1"), at("A5")))
+    for column in ["B", "C", "D", "E", "G", "H"] {
+        fill.autofill(sheet: 0, source: CellRange(at("\(column)1"), at("\(column)1")), target: CellRange(at("\(column)1"), at("\(column)4")))
+    }
+    fill.autofill(sheet: 0, source: CellRange(at("F1"), at("F2")), target: CellRange(at("F1"), at("F5")))
+    let cells = fill.sheets[0].cells
+    check("fill numbers step", (1...5).map { cells[at("A\($0)")]! }, ["1", "3", "5", "7", "9"])
+    check("fill numbered text", (1...4).map { cells[at("B\($0)")]! }, ["Item 7", "Item 8", "Item 9", "Item 10"])
+    check("fill weekdays", (1...4).map { cells[at("C\($0)")]! }, ["Mon", "Tue", "Wed", "Thu"])
+    check("fill months keep case", (1...3).map { cells[at("D\($0)")]! }, ["JANUARY", "FEBRUARY", "MARCH"])
+    check("fill formulas shift", cells[at("E3")], "=A3*2")
+    check("fill dates by day", display(fill, "G3"), "10/20/2026")
+    check("fill keeps zero padding", cells[at("H4")], "Q12")
+    check("fill repeats text", (1...5).map { cells[at("F\($0)")]! }, ["x", "y", "x", "y", "x"])
+    check("fill copies controls", fill.sheets[0].controls[at("F3")], .checkbox)
+    fill.autofill(sheet: 0, source: CellRange(at("C1"), at("C1")), target: CellRange(at("C1"), at("E1")))
+    check("fill right", ["D1", "E1"].map { fill.sheets[0].cells[at($0)]! }, ["Tue", "Wed"])
+
+    var sales = Workbook(sheets: [sheet([
+        "A1": "Region", "B1": "Rep", "C1": "Amount",
+        "A2": "West", "B2": "Ann", "C2": "100", "A3": "East", "B3": "Bob", "C3": "50",
+        "A4": "West", "B4": "Cy", "C4": "300", "A5": "North", "B5": "Di", "C5": "20",
+    ], name: "Sales Data")])
+    let summaryIndex = sales.addCategorySummary(sheet: 0, table: CellRange(at("A1"), at("C5")), hasHeader: true, groupBy: 0)
+    check("summary sheet", summaryIndex.map { sales.sheets[$0].name }, "Region Summary")
+    if let summaryIndex {
+        check("summary groups", (5...7).map { display(sales, "A\($0)", sheet: summaryIndex) }, ["East", "North", "West"])
+        check("summary counts", (5...7).map { display(sales, "B\($0)", sheet: summaryIndex) }, ["1", "1", "2"])
+        check("summary totals", display(sales, "C7", sheet: summaryIndex), "400.00")
+        check("summary averages", display(sales, "D7", sheet: summaryIndex), "200.00")
+        check("summary grand total", display(sales, "C8", sheet: summaryIndex), "470.00")
+        sales.sheets[0].cells[at("C2")] = "1000"
+        check("summary stays live", display(sales, "C7", sheet: summaryIndex), "1,300.00")
+    }
+
+    var templates = Workbook()
+    for template in SheetTemplate.allCases {
+        let index = templates.addSheet(from: template)
+        let calc = Calculator(workbook: templates)
+        let errors = templates.sheets[index].cells.keys.filter { if case .error = calc.value(sheet: index, at: $0) { true } else { false } }
+        check("template \(template.rawValue) has no errors", errors.map(\.a1).sorted(), [])
+    }
+    check("template names unique", templates.addSheet(from: .budget) > 0 && templates.sheets.last?.name == "Personal Budget 2", true)
+    let templateFile = try XLSXReader.workbook(from: XLSXWriter.data(for: templates))
+    check("templates round trip controls", templateFile.sheets.map(\.controls), templates.sheets.map(\.controls))
+} catch {
+    failures += 1
+    print("FAIL Numbers features: \(error)")
 }
 
 // Formula autocomplete

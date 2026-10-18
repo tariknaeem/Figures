@@ -22,6 +22,8 @@ public struct Sheet: Equatable, Sendable {
     /// What the user typed, keyed by cell. Formulas start with `=`.
     public var cells: [CellAddress: String] = [:]
     public var formats: [CellAddress: CellFormat] = [:]
+    /// Interactive controls shown in cells: checkboxes, star ratings, pop-up menus, steppers and sliders.
+    public var controls: [CellAddress: CellControl] = [:]
     /// Custom column widths in points.
     public var columnWidths: [Int: Double] = [:]
     /// Width of columns without a custom width, in points (Excel's 8.43 characters).

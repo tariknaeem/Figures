@@ -147,6 +147,7 @@ extension Workbook {
                 let address = CellAddress(row: row, column: column)
                 sheet.cells.removeValue(forKey: address)
                 sheet.formats.removeValue(forKey: address)
+                sheet.controls.removeValue(forKey: address)
             }
         }
         for (offset, sourceRow) in sourceRows.enumerated() {
@@ -158,6 +159,7 @@ extension Workbook {
                     sheet.cells[to] = CellInput.isFormula(raw) ? FormulaText.shifted(raw, rows: row - sourceRow, columns: 0) : raw
                 }
                 if let format = old.formats[from] { sheet.formats[to] = format }
+                if let control = old.controls[from] { sheet.controls[to] = control }
             }
         }
         sheets[index] = sheet
@@ -185,6 +187,9 @@ extension Sheet {
         })
         formats = Dictionary(uniqueKeysWithValues: formats.compactMap { address, format in
             change.adjust(address).map { ($0, format) }
+        })
+        controls = Dictionary(uniqueKeysWithValues: controls.compactMap { address, control in
+            change.adjust(address).map { ($0, control) }
         })
         if change.affectsRows {
             hiddenRows = Set(hiddenRows.compactMap(change.map))

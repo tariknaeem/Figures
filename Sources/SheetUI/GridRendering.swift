@@ -21,6 +21,15 @@ struct FontSpec: Hashable {
     }
 }
 
+/// An interactive control as a cell shows it.
+enum ControlFace: Equatable {
+    case checkbox(Bool)
+    case rating(Int)
+    case popUp([String])
+    case stepper(value: Double, step: Double)
+    case slider(value: Double, minimum: Double, maximum: Double, step: Double)
+}
+
 /// What one cell, or the merged area it starts, shows.
 struct CellFace: Equatable {
     var width: CGFloat
@@ -40,13 +49,14 @@ struct CellFace: Equatable {
     var strikethrough: Bool
     var filterHeader: Bool
     var filterActive: Bool
+    var control: ControlFace?
 
     static func == (a: CellFace, b: CellFace) -> Bool {
         a.width == b.width && a.height == b.height && a.textWidth == b.textWidth && a.text == b.text && a.font == b.font
             && a.textColor == b.textColor && a.fill == b.fill && a.dataBar == b.dataBar && a.border == b.border
             && a.alignment.horizontal == b.alignment.horizontal && a.alignment.vertical == b.alignment.vertical
             && a.wrap == b.wrap && a.indent == b.indent && a.underline == b.underline && a.strikethrough == b.strikethrough
-            && a.filterHeader == b.filterHeader && a.filterActive == b.filterActive
+            && a.filterHeader == b.filterHeader && a.filterActive == b.filterActive && a.control == b.control
     }
 }
 
@@ -76,6 +86,10 @@ struct RowSelection: Equatable {
     var activeColumn: Int?
     var rangeColumns: ClosedRange<Int>?
     var headerSelected = false
+    /// The column whose cell carries the fill handle, at the selection's bottom-right corner.
+    var handleColumn: Int?
+    /// Columns an autofill drag is about to fill.
+    var fillColumns: ClosedRange<Int>?
 }
 
 enum GridCommand {
@@ -87,6 +101,8 @@ enum GridCommand {
     case selectRow(Int), rowMenu(RowMenuCommand, Int)
     case resizeRow(Int, startHeight: CGFloat, translation: CGFloat), endRowResize
     case commitEdit(rows: Int, columns: Int), cancelEdit, editorTab
+    case setControl(CellAddress, CellValue)
+    case fillDrag(CGSize), fillEnd
 }
 
 enum RowMenuCommand {
@@ -292,8 +308,21 @@ final class GridLayout {
             underline: conditional?.style.underline ?? format.underline,
             strikethrough: conditional?.style.strikethrough ?? format.strikethrough,
             filterHeader: isFilterHeader,
-            filterActive: isFilterHeader && filter?.allowedValues[address.column] != nil
+            filterActive: isFilterHeader && filter?.allowedValues[address.column] != nil,
+            control: controlFace(sheet.controls[address], value: value)
         )
+    }
+
+    private func controlFace(_ control: CellControl?, value: CellValue) -> ControlFace? {
+        guard let control, !key.showFormulas else { return nil }
+        let number = value.numberValue ?? 0
+        switch control {
+        case .checkbox: return .checkbox(value.isTrue)
+        case .rating: return .rating(Int(min(5, max(0, number.rounded()))))
+        case .popUp(let source): return .popUp(calc.popUpOptions(source, sheet: sheetIndex))
+        case .stepper(_, _, let step): return .stepper(value: number, step: step)
+        case .slider(let low, let high, let step): return .slider(value: number, minimum: low, maximum: max(high, low + step), step: step)
+        }
     }
 }
 
@@ -324,6 +353,8 @@ struct RowView: View, Equatable {
                     CellView(cell: cell, address: CellAddress(row: render.row, column: cell.column), height: render.height,
                              isActive: selection.activeColumn == cell.column,
                              inRange: selection.rangeColumns?.contains(cell.column) == true,
+                             hasHandle: selection.handleColumn == cell.column,
+                             inFillPreview: selection.fillColumns?.contains(cell.column) == true,
                              editor: editor?.address.column == cell.column ? editor : nil,
                              filterOpen: openFilterColumn == cell.column,
                              zoom: zoom, actions: actions, focus: focus)
@@ -400,6 +431,8 @@ struct CellView: View {
     let height: CGFloat
     let isActive: Bool
     let inRange: Bool
+    let hasHandle: Bool
+    let inFillPreview: Bool
     let editor: CellEditor?
     let filterOpen: Bool
     let zoom: CGFloat
@@ -420,6 +453,10 @@ struct CellView: View {
             }
             .overlay {
                 if inRange { Color.accentColor.opacity(0.14).allowsHitTesting(false) }
+                if inFillPreview { Color.gray.opacity(0.18).allowsHitTesting(false) }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if hasHandle { fillHandle }
             }
             .contentShape(Rectangle())
             .onTapGesture { actions.perform(.tap(address)) }
@@ -438,7 +475,9 @@ struct CellView: View {
                     .frame(width: max(0, (face.width - 4) * bar.fraction), height: max(0, face.height - 4))
                     .offset(x: 2, y: 2)
             }
-            if !face.text.isEmpty {
+            if let control = face.control {
+                controlView(face, control)
+            } else if !face.text.isEmpty {
                 Text(face.text)
                     .font(face.font.font)
                     .underline(face.underline)
@@ -463,6 +502,118 @@ struct CellView: View {
         .frame(width: face.width, height: face.height, alignment: .topLeading)
         .overlay(alignment: .trailing) {
             if face.filterHeader { filterButton(face) }
+        }
+    }
+
+    /// The small square at the selection's corner; drag it to extend a series.
+    private var fillHandle: some View {
+        Rectangle()
+            .fill(Color.accentColor)
+            .overlay(Rectangle().stroke(Color.white, lineWidth: 1))
+            .frame(width: 7, height: 7)
+            .offset(x: 3, y: 3)
+            .contentShape(Rectangle().inset(by: -4))
+            .gesture(
+                DragGesture(minimumDistance: 2, coordinateSpace: .global)
+                    .onChanged { actions.perform(.fillDrag($0.translation)) }
+                    .onEnded { _ in actions.perform(.fillEnd) }
+            )
+            #if os(macOS)
+            .onHover { inside in
+                if inside { NSCursor.crosshair.push() } else { NSCursor.pop() }
+            }
+            #endif
+            .help("Drag to fill")
+    }
+
+    private func set(_ value: CellValue) {
+        actions.perform(.setControl(address, value))
+    }
+
+    @ViewBuilder
+    private func controlView(_ face: CellFace, _ control: ControlFace) -> some View {
+        let iconSize = 13 * zoom
+        switch control {
+        case .checkbox(let on):
+            Button { set(.boolean(!on)) } label: {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.system(size: iconSize))
+                    .foregroundStyle(on ? Color.accentColor : Color.gray)
+                    .padding(.horizontal, 4 * zoom)
+            }
+            .buttonStyle(.plain)
+            .frame(width: face.width, height: face.height,
+                   alignment: Alignment(horizontal: face.alignment.horizontal == .trailing ? .trailing
+                                            : (face.alignment.horizontal == .leading ? .leading : .center), vertical: .center))
+        case .rating(let stars):
+            HStack(spacing: 1) {
+                ForEach(1...5, id: \.self) { star in
+                    Button { set(.number(Double(star == stars ? star - 1 : star))) } label: {
+                        Image(systemName: star <= stars ? "star.fill" : "star")
+                            .font(.system(size: 11 * zoom))
+                            .foregroundStyle(star <= stars ? Color.orange : Color.gray.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 4 * zoom)
+            .frame(width: face.width, height: face.height, alignment: .leading)
+        case .popUp(let options):
+            HStack(spacing: 2) {
+                Text(face.text)
+                    .font(face.font.font)
+                    .foregroundStyle(face.textColor.map { Color($0) } ?? Color.black)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Menu {
+                    ForEach(options, id: \.self) { option in
+                        Button(option) { set(.text(option)) }
+                    }
+                    Divider()
+                    Button("None") { set(.empty) }
+                } label: {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 9 * zoom, weight: .semibold))
+                        .foregroundStyle(Color.gray)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+            }
+            .padding(.horizontal, 4 * zoom)
+            .frame(width: face.width, height: face.height)
+        case .stepper(let value, let step):
+            HStack(spacing: 3) {
+                Text(face.text)
+                    .font(face.font.font)
+                    .foregroundStyle(face.textColor.map { Color($0) } ?? Color.black)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                ForEach([("minus", -step), ("plus", step)], id: \.0) { symbol, delta in
+                    Button { set(.number(value + delta)) } label: {
+                        Image(systemName: symbol)
+                            .font(.system(size: 8 * zoom, weight: .bold))
+                            .frame(width: 14 * zoom, height: 14 * zoom)
+                            .background(Color.gray.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 4 * zoom)
+            .frame(width: face.width, height: face.height)
+        case .slider(let value, let low, let high, let step):
+            HStack(spacing: 4) {
+                Slider(value: Binding(get: { value }, set: { set(.number(($0 / step).rounded() * step)) }), in: low...high)
+                    .controlSize(.mini)
+                Text(face.text)
+                    .font(face.font.font)
+                    .foregroundStyle(Color.black)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .padding(.horizontal, 4 * zoom)
+            .frame(width: face.width, height: face.height)
         }
     }
 

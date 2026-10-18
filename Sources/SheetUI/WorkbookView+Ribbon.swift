@@ -249,6 +249,11 @@ extension WorkbookView {
         }
         RibbonGroup(title: "Styles") {
             conditionalFormattingMenu
+            RibbonMenu(title: "Table Styles", systemImage: "tablecells", large: true) {
+                ForEach(TableStylePreset.allCases) { style in
+                    Button(style.rawValue) { applyTableStyle(style) }
+                }
+            }
             RibbonMenu(title: "Cell Styles", systemImage: "paintpalette", large: true) {
                 ForEach(CellStylePreset.allCases) { style in
                     Button(style.rawValue) { applyCellStyle(style) }
@@ -287,7 +292,13 @@ extension WorkbookView {
         RibbonGroup(title: "Editing") {
             autoSumMenu(large: true)
             VStack(alignment: .leading, spacing: 2) {
-                RibbonButton(title: "Fill Down (⌘D)", systemImage: "arrow.down.to.line") { fillDown() }
+                RibbonMenu(title: "Fill", systemImage: "arrow.down.to.line") {
+                    Button("Fill Down (⌘D)") { fillDown() }
+                    Button("Fill Right (⌘R)") { fillRight() }
+                    Divider()
+                    Button("Fill Series Down") { fillSeries(down: true) }
+                    Button("Fill Series Right") { fillSeries(down: false) }
+                }
                 RibbonMenu(title: "Clear", systemImage: "eraser") {
                     Button("Clear All") { clearAll() }
                     Button("Clear Formats") { clearFormats() }
@@ -410,6 +421,23 @@ extension WorkbookView {
 
     @ViewBuilder
     private var insertTab: some View {
+        RibbonGroup(title: "Templates") {
+            RibbonMenu(title: "Templates", systemImage: "square.grid.2x2", large: true) {
+                ForEach(SheetTemplate.allCases) { template in
+                    Button("\(template.rawValue) — \(template.summary)") { insertTemplate(template) }
+                }
+            }
+        }
+        RibbonGroup(title: "Controls") {
+            RibbonButton(title: "Checkbox", systemImage: "checkmark.square", large: true) { applyControl(.checkbox) }
+            RibbonButton(title: "Star Rating", systemImage: "star.leadinghalf.filled", large: true) { applyControl(.rating) }
+            RibbonButton(title: "Pop-Up Menu", systemImage: "chevron.up.chevron.down", large: true) { startControl(.popUp) }
+            VStack(alignment: .leading, spacing: 2) {
+                RibbonButton(title: "Stepper", systemImage: "plusminus") { startControl(.stepper) }
+                RibbonButton(title: "Slider", systemImage: "slider.horizontal.3") { startControl(.slider) }
+                RibbonButton(title: "Remove Control", systemImage: "xmark.square") { applyControl(nil) }
+            }
+        }
         RibbonGroup(title: "Cells") {
             RibbonButton(title: "Rows Above", systemImage: "arrow.up.to.line.compact", large: true) { insertRows(below: false) }
             RibbonButton(title: "Columns Left", systemImage: "arrow.left.to.line.compact", large: true) { insertColumns(right: false) }
@@ -503,6 +531,9 @@ extension WorkbookView {
                 toggleFilter()
             }
             RibbonButton(title: "Clear", systemImage: "xmark.circle", large: true) { clearFilterCriteria() }
+        }
+        RibbonGroup(title: "Categories") {
+            RibbonButton(title: "Summarize by Category", systemImage: "rectangle.3.group.bubble", large: true) { summarizeByCategory() }
         }
         RibbonGroup(title: "Data Tools") {
             RibbonButton(title: "Remove Duplicates", systemImage: "square.on.square.dashed", large: true) { removeDuplicates() }

@@ -140,6 +140,7 @@ public enum NumberFormatPreset: String, CaseIterable, Identifiable, Sendable {
     case longDate = "Long Date"
     case isoDate = "ISO Date"
     case time = "Time"
+    case duration = "Duration"
     case percentage = "Percentage"
     case fraction = "Fraction"
     case scientific = "Scientific"
@@ -157,6 +158,7 @@ public enum NumberFormatPreset: String, CaseIterable, Identifiable, Sendable {
         case .longDate: "dddd, mmmm d, yyyy"
         case .isoDate: "yyyy-mm-dd"
         case .time: "h:mm:ss AM/PM"
+        case .duration: "[h]:mm:ss"
         case .percentage: "0.00%"
         case .fraction: "# ?/?"
         case .scientific: "0.00E+00"
@@ -169,6 +171,7 @@ public enum NumberFormatPreset: String, CaseIterable, Identifiable, Sendable {
         let sample: Double = switch self {
         case .shortDate, .longDate, .isoDate: 46_313
         case .time: 0.6875
+        case .duration: 1.5625
         case .percentage: 0.125
         case .fraction: 1.75
         default: 1234.5

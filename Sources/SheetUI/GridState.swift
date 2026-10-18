@@ -40,6 +40,9 @@ final class GridModel: ObservableObject {
     @Published var painter: CellFormat?
     @Published var ruleDraft: RuleDraft?
     @Published var formatDraft: FormatDraft?
+    @Published var controlDraft: ControlDraft?
+    /// The area an autofill drag would fill.
+    @Published var fillPreview: CellRange?
     var clipboard: GridClipboard?
     var lastTap: (address: CellAddress, time: Date)?
     var resizing: (column: Int, startWidth: CGFloat)?
@@ -164,6 +167,29 @@ enum HighlightStyle: String, CaseIterable, Identifiable {
         case .redText: .redText
         case .bold: DifferentialStyle(bold: true)
         }
+    }
+}
+
+/// Settings for a pop-up menu, stepper or slider being added to cells.
+final class ControlDraft: ObservableObject, Identifiable {
+    enum Kind: String {
+        case popUp = "Pop-Up Menu", stepper = "Stepper", slider = "Slider"
+    }
+
+    let id = UUID()
+    let kind: Kind
+    /// Pop-up choices, one per line.
+    @Published var items: String
+    @Published var minimum: String
+    @Published var maximum: String
+    @Published var step: String
+
+    init(kind: Kind, items: [String] = []) {
+        self.kind = kind
+        self.items = items.joined(separator: "\n")
+        minimum = "0"
+        maximum = kind == .slider ? "100" : "10"
+        step = "1"
     }
 }
 

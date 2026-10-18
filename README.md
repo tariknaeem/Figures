@@ -35,16 +35,20 @@ external workbook links, and macros (`.xlsm` opens, saves as `.xlsx`).
 | Tab | Groups |
 |---|---|
 | Home | Clipboard (paste, cut, copy, Format Painter, Paste Special, undo, redo) · Font (family, size, bold, italic, underline, strikethrough, borders, fill and font colors) · Alignment (top/middle/bottom, left/center/right, wrap, indent, merge) · Number (presets with previews, custom codes, accounting, percent, comma, decimals) · Styles (conditional formatting, cell styles) · Cells (insert, delete, format, hide/unhide, autofit) · Editing (AutoSum, Fill Down, Clear, Sort & Filter, Find) |
-| Insert | Rows, columns, sheets · Column, bar, line and pie charts · Today and Now · Functions by category |
+| Insert | Templates · Controls (checkbox, star rating, pop-up menu, stepper, slider) · Rows, columns, sheets · Column, bar, line and pie charts · Today and Now · Functions by category |
 | Formulas | AutoSum · Function library by category · Defined names · Show Formulas |
-| Data | Sort · Filter · Clear filter · Remove Duplicates · Find & Replace |
+| Data | Sort · Filter · Clear filter · Summarize by Category · Remove Duplicates · Find & Replace |
 | View | Gridlines · Show Formulas · Zoom · Freeze panes |
+
+Numbers-style extras: checkboxes, star ratings, pop-up menus, steppers and sliders in cells; templates
+(budget, invoice, checklist, weekly planner, grade book, reading list); table styles; AutoFill by dragging the
+selection's corner; Summarize by Category; and Quick Calculations (Sum, Average, Min, Max, Count).
 
 Also: filter dropdowns, right-click menus on cells and headers, column and row resizing, a Name Box that jumps
 to cells or names, formula autocomplete with argument hints, text that overflows into empty neighbors, and a
 status bar with Sum/Average/Count and zoom.
 
-Shortcuts: ⌘B ⌘I ⌘U · ⌘D fill down · ⌘F find · ⌘1 format cells · ⌘; date · ⇧⌘; time · ⇧⌘L filter ·
+Shortcuts: ⌘B ⌘I ⌘U · ⌘D fill down · ⌘R fill right · ⌘F find · ⌘1 format cells · ⌘; date · ⇧⌘; time · ⇧⌘L filter ·
 ⌃⇧4 currency · ⌃⇧5 percent · ⌘= / ⌘− zoom · Esc cancels editing or Format Painter.
 
 ## Formulas

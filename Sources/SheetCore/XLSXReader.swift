@@ -115,6 +115,36 @@ public enum XLSXReader {
             a.element.0 != b.element.0 ? a.element.0 < b.element.0 : a.offset < b.offset
         }.map(\.element.1)
 
+        for validation in root.child("dataValidations")?.children("dataValidation") ?? [] where validation.attribute("type") == "list" {
+            guard let formula = validation.child("formula1")?.text, !formula.isEmpty else { continue }
+            let source: PopUpSource
+            if formula.hasPrefix("\""), formula.hasSuffix("\""), formula.count >= 2 {
+                source = .items(formula.dropFirst().dropLast().split(separator: ",", omittingEmptySubsequences: false).map(String.init))
+            } else {
+                source = .range(formula.hasPrefix("=") ? String(formula.dropFirst()) : formula)
+            }
+            for range in RangeList.parse(validation.attribute("sqref") ?? "") where range.cellCount <= 100_000 {
+                for address in range.addresses { sheet.controls[address] = .popUp(source) }
+            }
+        }
+        for ext in root.child("extLst")?.children("ext") ?? [] where ext.attribute("uri") == XLSXWriter.controlsExtension {
+            for node in ext.child("controls")?.children("control") ?? [] {
+                func number(_ name: String, _ fallback: Double) -> Double { node.attribute(name).flatMap(Double.init) ?? fallback }
+                let control: CellControl
+                switch node.attribute("type") ?? "" {
+                case "checkbox": control = .checkbox
+                case "rating": control = .rating
+                case "stepper": control = .stepper(minimum: number("min", 0), maximum: number("max", 100), step: number("step", 1))
+                case "slider": control = .slider(minimum: number("min", 0), maximum: number("max", 100), step: number("step", 1))
+                case "popup": control = .popUp(.items(node.children("item").map(\.text)))
+                default: continue
+                }
+                for range in RangeList.parse(node.attribute("sqref") ?? "") where range.cellCount <= 100_000 {
+                    for address in range.addresses { sheet.controls[address] = control }
+                }
+            }
+        }
+
         // Shared formulas store their text once, on the first cell of the block.
         var sharedFormulas: [String: (formula: String, origin: CellAddress)] = [:]
         var lastRow = 0

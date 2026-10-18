@@ -66,6 +66,11 @@ public struct WorkbookView: View {
             .sheet(item: $model.ruleDraft) { draft in
                 RuleSheet(draft: draft) { applyRule($0) }
             }
+            .background {
+                Color.clear.sheet(item: $model.controlDraft) { draft in
+                    ControlSheet(draft: draft) { applyControl($0) }
+                }
+            }
             Divider()
             bottomBar
         }
@@ -207,7 +212,8 @@ public struct WorkbookView: View {
         let frozen = min(sheet.frozenRows, rows)
         let bodyRows = (frozen..<rows).filter { !layout.hidden.contains($0) }
         let frozenRows = (0..<frozen).filter { !layout.hidden.contains($0) }
-        let context = RowContext(selection: selection, editor: editor, filter: sheet.filter, openFilterColumn: model.filterColumn)
+        let context = RowContext(selection: selection, editor: editor, filter: sheet.filter, openFilterColumn: model.filterColumn,
+                                 fillPreview: model.fillPreview)
         configureActions()
 
         return ScrollViewReader { proxy in
@@ -256,6 +262,7 @@ public struct WorkbookView: View {
         let editor: CellEditor?
         let filter: AutoFilter?
         let openFilterColumn: Int?
+        let fillPreview: CellRange?
     }
 
     private func rowView(_ row: Int, _ layout: GridLayout, _ context: RowContext) -> some View {
@@ -264,6 +271,10 @@ public struct WorkbookView: View {
         var selection = RowSelection(headerSelected: inRows)
         if context.selection.active.row == row { selection.activeColumn = context.selection.active.column }
         if range.cellCount > 1, inRows { selection.rangeColumns = range.start.column...range.end.column }
+        if context.editor == nil, row == range.end.row { selection.handleColumn = range.end.column }
+        if let preview = context.fillPreview, (preview.start.row...preview.end.row).contains(row) {
+            selection.fillColumns = preview.start.column...preview.end.column
+        }
         let filtered = context.filter.map { !$0.allowedValues.isEmpty && $0.dataRows?.contains(row) == true } ?? false
         let editor = context.editor.flatMap { $0.inCell && $0.address.row == row ? $0 : nil }
         let openFilter = context.filter?.range.start.row == row ? context.openFilterColumn : nil
@@ -317,6 +328,13 @@ public struct WorkbookView: View {
         case .endRowResize: model.resizingRow = nil
         case .commitEdit(let rows, let columns): commitEdit(moveRows: rows, moveColumns: columns)
         case .cancelEdit: cancelEdit()
+        case .setControl(let address, let value):
+            setControlValue(at: address, to: value)
+        case .fillDrag(let translation):
+            model.fillPreview = fillTarget(for: translation)
+        case .fillEnd:
+            if let target = model.fillPreview { autofillSelection(to: target) }
+            model.fillPreview = nil
         case .editorTab:
             guard let editor else { return }
             let assist = FormulaAssist(text: editor.text)
@@ -519,14 +537,17 @@ public struct WorkbookView: View {
             if case .number(let n) = cell.value { return n }
             return nil
         }
+        // Quick Calculations, as in Numbers' status bar.
         var parts: [String] = []
         if !numbers.isEmpty {
             let sum = numbers.reduce(0, +)
-            parts.append("Average: " + CellValue.number(sum / Double(numbers.count)).displayText)
             parts.append("Sum: " + CellValue.number(sum).displayText)
+            parts.append("Average: " + CellValue.number(sum / Double(numbers.count)).displayText)
+            parts.append("Min: " + CellValue.number(numbers.min()!).displayText)
+            parts.append("Max: " + CellValue.number(numbers.max()!).displayText)
         }
         parts.append("Count: \(values.count)")
-        return parts.joined(separator: "    ")
+        return parts.joined(separator: "   ")
     }
 
     /// Invisible buttons so shortcuts work whichever ribbon tab is showing.
@@ -536,6 +557,7 @@ public struct WorkbookView: View {
             Button("Italic") { toggle(\.italic, "Italic") }.keyboardShortcut("i")
             Button("Underline") { toggle(\.underline, "Underline") }.keyboardShortcut("u")
             Button("Fill Down") { fillDown() }.keyboardShortcut("d")
+            Button("Fill Right") { fillRight() }.keyboardShortcut("r")
             Button("Find") { showFind() }.keyboardShortcut("f")
             Button("Filter") { toggleFilter() }.keyboardShortcut("l", modifiers: [.command, .shift])
             Button("Currency") { setNumberFormat(NumberFormatPreset.currency.code) }.keyboardShortcut("4", modifiers: [.control, .shift])

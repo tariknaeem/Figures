@@ -126,7 +126,83 @@ public enum XLSXWriter {
         for (priority, format) in sheet.conditionalFormats.enumerated() {
             xml += conditionalXML(format, priority: priority + 1, styles: &styles)
         }
+        xml += controlsXML(sheet.controls)
         return xml + "</worksheet>"
+    }
+
+    /// Identifies Figures' own worksheet extension; Excel skips extensions it does not know.
+    static let controlsExtension = "{3F1D8C2A-6B4E-4E8F-9A7C-2D5B1E0F4A6C}"
+    static let controlsNamespace = "https://github.com/tariknaeem/Figures/controls"
+
+    /// Pop-up menus with a short list or a range become Excel data validation lists; the other controls,
+    /// and lists Excel cannot hold inline, go in a Figures extension.
+    private static func controlsXML(_ controls: [CellAddress: CellControl]) -> String {
+        guard !controls.isEmpty else { return "" }
+        var validations: [(sqref: String, formula: String)] = []
+        var extensions: [(sqref: String, control: CellControl)] = []
+        for (control, addresses) in Dictionary(grouping: controls.keys, by: { controls[$0]! }).sorted(by: { $0.value.min()! < $1.value.min()! }) {
+            let sqref = compressed(addresses)
+            if case .popUp(let source) = control {
+                switch source {
+                case .range(let reference):
+                    validations.append((sqref, reference))
+                    continue
+                case .items(let items):
+                    let inline = "\"" + items.joined(separator: ",") + "\""
+                    if inline.count <= 255, !items.contains(where: { $0.contains(",") || $0.contains("\"") }) {
+                        validations.append((sqref, inline))
+                        continue
+                    }
+                }
+            }
+            extensions.append((sqref, control))
+        }
+        var xml = ""
+        if !validations.isEmpty {
+            xml += #"<dataValidations count="\#(validations.count)">"#
+            for validation in validations {
+                xml += #"<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="\#(validation.sqref)"><formula1>\#(XML.escape(validation.formula))</formula1></dataValidation>"#
+            }
+            xml += "</dataValidations>"
+        }
+        if !extensions.isEmpty {
+            xml += #"<extLst><ext uri="\#(controlsExtension)" xmlns:fig="\#(controlsNamespace)"><fig:controls>"#
+            for item in extensions {
+                switch item.control {
+                case .checkbox: xml += #"<fig:control sqref="\#(item.sqref)" type="checkbox"/>"#
+                case .rating: xml += #"<fig:control sqref="\#(item.sqref)" type="rating"/>"#
+                case .stepper(let low, let high, let step), .slider(let low, let high, let step):
+                    let type = if case .stepper = item.control { "stepper" } else { "slider" }
+                    xml += #"<fig:control sqref="\#(item.sqref)" type="\#(type)" min="\#(NumberText.roundTrip(low))" max="\#(NumberText.roundTrip(high))" step="\#(NumberText.roundTrip(step))"/>"#
+                case .popUp(let source):
+                    if case .items(let items) = source {
+                        xml += #"<fig:control sqref="\#(item.sqref)" type="popup">"#
+                        for option in items { xml += "<fig:item>\(XML.escape(option))</fig:item>" }
+                        xml += "</fig:control>"
+                    }
+                }
+            }
+            xml += "</fig:controls></ext></extLst>"
+        }
+        return xml
+    }
+
+    /// Writes addresses as a space-separated sqref, joining runs down each column into ranges.
+    static func compressed(_ addresses: [CellAddress]) -> String {
+        let sorted = addresses.sorted { ($0.column, $0.row) < ($1.column, $1.row) }
+        var parts: [String] = []
+        var index = 0
+        while index < sorted.count {
+            let start = sorted[index]
+            var end = start
+            while index + 1 < sorted.count, sorted[index + 1].column == start.column, sorted[index + 1].row == end.row + 1 {
+                index += 1
+                end = sorted[index]
+            }
+            parts.append(CellRange(start, end).a1)
+            index += 1
+        }
+        return parts.joined(separator: " ")
     }
 
     private static func conditionalXML(_ format: ConditionalFormat, priority: Int, styles: inout StyleTable) -> String {

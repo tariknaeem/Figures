@@ -1088,3 +1088,198 @@ extension WorkbookView {
         model.renaming = index
     }
 }
+
+// MARK: - Numbers-style features
+
+extension WorkbookView {
+    /// Adds a control to the selected cells and converts their values to fit it, or removes controls.
+    func applyControl(_ control: CellControl?) {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let index = activeSheet
+        let addresses = selection.range.addresses
+        let calc = calculator
+        mutate(control == nil ? "Remove Control" : "Add Control") { workbook in
+            for address in addresses {
+                guard let control else {
+                    workbook.sheets[index].controls.removeValue(forKey: address)
+                    continue
+                }
+                workbook.sheets[index].controls[address] = control
+                let raw = workbook.sheets[index].cells[address] ?? ""
+                guard !CellInput.isFormula(raw) else { continue }
+                if case .popUp = control { continue }
+                workbook.sheets[index].setInput(control.input(for: calc.value(sheet: index, at: address)), at: address)
+            }
+        }
+    }
+
+    /// Opens the settings dialog; pop-up menus start with the distinct values already in the selection.
+    func startControl(_ kind: ControlDraft.Kind) {
+        let calc = calculator
+        var seen = Set<String>()
+        let existing = storedAddresses(in: selection.range).sorted().compactMap { address -> String? in
+            let text = calc.displayText(sheet: activeSheet, at: address)
+            return !text.isEmpty && seen.insert(text).inserted ? text : nil
+        }
+        model.controlDraft = ControlDraft(kind: kind, items: Array(existing.prefix(250)))
+    }
+
+    /// Clicking a control: stores the new value, kept within the control's limits.
+    func setControlValue(at address: CellAddress, to value: CellValue) {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let index = activeSheet
+        guard let control = sheet.controls[address] else { return }
+        let input = control.input(for: value)
+        guard input != (sheet.cells[address] ?? "") else { return }
+        mutate("Change Value") { $0.sheets[index].setInput(input, at: address) }
+        select(address)
+    }
+
+    /// The area a fill-handle drag reaches: whole rows below, or whole columns to the right of, the selection.
+    func fillTarget(for translation: CGSize) -> CellRange? {
+        let range = selection.range
+        let layout = layout
+        if abs(translation.height) >= abs(translation.width) {
+            guard translation.height > 0 else { return nil }
+            var remaining = translation.height
+            var row = range.end.row
+            while row + 1 < CellAddress.maxRows {
+                let next = row + 1
+                if layout.hidden.contains(next) {
+                    row = next
+                    continue
+                }
+                guard remaining >= layout.height(next) / 2 else { break }
+                remaining -= layout.height(next)
+                row = next
+            }
+            return row > range.end.row ? CellRange(range.start, CellAddress(row: row, column: range.end.column)) : nil
+        }
+        guard translation.width > 0 else { return nil }
+        var remaining = translation.width
+        var column = range.end.column
+        while column + 1 < CellAddress.maxColumns {
+            let next = column + 1
+            if sheet.hiddenColumns.contains(next) {
+                column = next
+                continue
+            }
+            guard remaining >= layout.width(next) / 2 else { break }
+            remaining -= layout.width(next)
+            column = next
+        }
+        return column > range.end.column ? CellRange(range.start, CellAddress(row: range.end.row, column: column)) : nil
+    }
+
+    func autofillSelection(to target: CellRange) {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let source = selection.range
+        let index = activeSheet
+        mutate("AutoFill") { $0.autofill(sheet: index, source: source, target: target) }
+        selection = GridSelection(anchor: target.end, active: target.start)
+    }
+
+    /// Fill Series: extends the pattern in the first row (or column) of the selection through the rest of it.
+    func fillSeries(down: Bool) {
+        let range = selection.range
+        if down {
+            guard range.rowCount > 1 else { return }
+            let seed = filledLength(down: true)
+            selection = GridSelection(anchor: CellAddress(row: range.start.row + seed - 1, column: range.end.column), active: range.start)
+            autofillSelection(to: range)
+        } else {
+            guard range.columnCount > 1 else { return }
+            let seed = filledLength(down: false)
+            selection = GridSelection(anchor: CellAddress(row: range.end.row, column: range.start.column + seed - 1), active: range.start)
+            autofillSelection(to: range)
+        }
+    }
+
+    /// How many leading rows (or columns) of the selection already hold values, at least one.
+    private func filledLength(down: Bool) -> Int {
+        let range = selection.range
+        let count = down ? range.rowCount : range.columnCount
+        var filled = 0
+        for offset in 0..<count {
+            let line = down
+                ? (range.start.column...range.end.column).map { CellAddress(row: range.start.row + offset, column: $0) }
+                : (range.start.row...range.end.row).map { CellAddress(row: $0, column: range.start.column + offset) }
+            guard line.contains(where: { sheet.cells[$0] != nil }) else { break }
+            filled += 1
+        }
+        return max(1, min(filled, count - 1))
+    }
+
+    func fillRight() {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let range = selection.range
+        guard range.columnCount > 1 else { return }
+        let index = activeSheet
+        mutate("Fill Right") { workbook in
+            for row in range.start.row...range.end.row {
+                let source = CellAddress(row: row, column: range.start.column)
+                let raw = workbook.sheets[index].cells[source] ?? ""
+                let format = workbook.sheets[index].formats[source] ?? CellFormat()
+                for column in (range.start.column + 1)...range.end.column {
+                    let target = CellAddress(row: row, column: column)
+                    let offset = column - range.start.column
+                    workbook.sheets[index].setInput(CellInput.isFormula(raw) ? FormulaText.shifted(raw, rows: 0, columns: offset) : raw, at: target)
+                    workbook.sheets[index].setFormat(format, at: target)
+                    workbook.sheets[index].controls[target] = workbook.sheets[index].controls[source]
+                }
+            }
+        }
+    }
+
+    /// A colored header row with banded rows below, over the selection or the data around the active cell.
+    func applyTableStyle(_ style: TableStylePreset) {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let range = selection.range.cellCount > 1 ? selection.range : sheet.currentRegion(around: selection.active)
+        let colors = style.colors
+        let header = SheetCore.RGBColor(hex: colors.header)
+        let band = SheetCore.RGBColor(hex: colors.band)
+        let line = BorderLine(.thin, color: SheetCore.RGBColor(hex: colors.line))
+        let plain = style == .plain
+        let index = activeSheet
+        mutate("Table Style") { workbook in
+            for address in range.addresses {
+                var format = workbook.sheets[index].formats[address] ?? CellFormat()
+                let offset = address.row - range.start.row
+                if offset == 0 {
+                    format.bold = true
+                    format.fillColor = plain ? nil : header
+                    format.textColor = plain ? nil : SheetCore.RGBColor(hex: "FFFFFF")
+                    format.border.bottom = BorderLine(.medium, color: SheetCore.RGBColor(hex: plain ? "595959" : colors.header))
+                } else {
+                    format.fillColor = !plain && offset % 2 == 0 ? band : nil
+                    format.border.bottom = line
+                }
+                workbook.sheets[index].setFormat(format, at: address)
+            }
+        }
+    }
+
+    func insertTemplate(_ template: SheetTemplate) {
+        var added = 0
+        mutate("New \(template.rawValue)") { added = $0.addSheet(from: template) }
+        switchSheet(added)
+    }
+
+    /// Groups the data around the selection by the active column and opens a live summary sheet.
+    func summarizeByCategory() {
+        commitEdit(moveRows: 0, moveColumns: 0)
+        let range = selection.range.cellCount > 1 ? selection.range : sheet.currentRegion(around: selection.active)
+        let hasHeader = (sheet.filter?.range.start == range.start) || range.rowCount > 1
+        let column = selection.active.column
+        let index = activeSheet
+        var created: Int?
+        mutate("Summarize by Category") {
+            created = $0.addCategorySummary(sheet: index, table: range, hasHeader: hasHeader, groupBy: column)
+        }
+        if let created {
+            switchSheet(created)
+        } else {
+            model.message = "Select a cell in the column to group by, inside a table with a header row and data below it."
+        }
+    }
+}

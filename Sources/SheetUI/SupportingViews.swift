@@ -464,3 +464,85 @@ enum CellStylePreset: String, CaseIterable, Identifiable {
         return f
     }
 }
+
+/// Choices for a pop-up menu, or limits for a stepper or slider.
+struct ControlSheet: View {
+    @ObservedObject var draft: ControlDraft
+    let onApply: (CellControl) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var control: CellControl? {
+        switch draft.kind {
+        case .popUp:
+            var seen = Set<String>()
+            let items = draft.items.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && seen.insert($0).inserted }
+            return items.isEmpty ? nil : .popUp(.items(items))
+        case .stepper, .slider:
+            guard let low = Double(draft.minimum), let high = Double(draft.maximum), let step = Double(draft.step),
+                  high > low, step > 0 else { return nil }
+            return draft.kind == .stepper ? .stepper(minimum: low, maximum: high, step: step) : .slider(minimum: low, maximum: high, step: step)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(draft.kind.rawValue).font(.headline)
+            if draft.kind == .popUp {
+                Text("Choices, one per line:")
+                TextEditor(text: $draft.items)
+                    .font(.system(size: 13))
+                    .frame(height: 150)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.gray.opacity(0.3)))
+            } else {
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                    GridRow {
+                        Text("Minimum")
+                        TextField("0", text: $draft.minimum).textFieldStyle(.roundedBorder).frame(width: 100)
+                    }
+                    GridRow {
+                        Text("Maximum")
+                        TextField("100", text: $draft.maximum).textFieldStyle(.roundedBorder).frame(width: 100)
+                    }
+                    GridRow {
+                        Text("Step")
+                        TextField("1", text: $draft.step).textFieldStyle(.roundedBorder).frame(width: 100)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("OK") {
+                    if let control {
+                        onApply(control)
+                        dismiss()
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(control == nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+}
+
+/// Quick table looks: a colored header row and banded body rows, as Numbers' table styles.
+enum TableStylePreset: String, CaseIterable, Identifiable {
+    case blue = "Blue", green = "Green", orange = "Orange", purple = "Purple", gray = "Gray", plain = "Plain"
+
+    var id: String { rawValue }
+
+    var colors: (header: String, band: String, line: String) {
+        switch self {
+        case .blue: ("4472C4", "D9E1F2", "8EA9DB")
+        case .green: ("70AD47", "E2EFDA", "A9D08E")
+        case .orange: ("ED7D31", "FCE4D6", "F4B084")
+        case .purple: ("7030A0", "E4DFEC", "B4A7D6")
+        case .gray: ("595959", "EDEDED", "BFBFBF")
+        case .plain: ("FFFFFF", "FFFFFF", "BFBFBF")
+        }
+    }
+}
